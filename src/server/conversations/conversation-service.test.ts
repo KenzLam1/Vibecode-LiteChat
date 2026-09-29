@@ -1,9 +1,10 @@
 import { MockLanguageModelV3, simulateReadableStream } from "ai/test";
+import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import type { CurrentUser } from "@/server/current-user";
 import { createDb, type Db } from "@/server/db";
-import { messages, users } from "@/server/db/schema";
+import { conversations, messages, users } from "@/server/db/schema";
 
 import {
   ConversationError,
@@ -405,6 +406,24 @@ describe("regenerate", () => {
       reason: "rejected",
     });
     expect(model.doStreamCalls).toHaveLength(1);
+  });
+});
+
+describe("retired models", () => {
+  it("opens a retired-model conversation read-only", async () => {
+    const conversation = await service.start(alice, "claude");
+    db.update(conversations)
+      .set({ modelId: "retired-model" })
+      .where(eq(conversations.id, conversation.id))
+      .run();
+
+    expect((await service.open(alice, conversation.id))?.conversation.modelId).toBe(
+      "retired-model",
+    );
+    await expect(
+      service.send(alice, conversation.id, { text: "Can you still answer?" }),
+    ).rejects.toMatchObject({ reason: "rejected" });
+    expect(model.doStreamCalls).toHaveLength(0);
   });
 });
 

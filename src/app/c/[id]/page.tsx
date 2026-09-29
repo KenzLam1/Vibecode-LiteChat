@@ -5,6 +5,7 @@ import { conversationService } from "@/server/conversations";
 import { requireUser } from "@/server/current-user";
 
 import { Chat } from "../../chat";
+import { RetiredConversation } from "../../components/retired-conversation";
 
 export default async function ConversationPage({
   params,
@@ -15,10 +16,15 @@ export default async function ConversationPage({
   // Someone else's conversation is indistinguishable from a missing one.
   if (!opened) notFound();
 
-  // TODO(ticket 05): a retired model's conversation opens read-only with a
-  // banner. Until then it isn't shown.
   const model = findModel(opened.conversation.modelId);
-  if (!model) notFound();
+  if (!model) {
+    return (
+      <RetiredConversation
+        modelId={opened.conversation.modelId}
+        messages={opened.messages}
+      />
+    );
+  }
 
   return (
     <Chat

@@ -4,14 +4,13 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { type FormEvent, useState, useTransition } from "react";
 
-import { models } from "@/lib/models";
 import type { Conversation } from "@/server/conversations";
 
 import {
   deleteConversation,
   renameConversation,
-  startConversation,
 } from "../conversation-actions";
+import { NewConversationButton } from "./new-conversation";
 
 const dateFormatter = new Intl.DateTimeFormat("en-US", {
   month: "short",
@@ -79,17 +78,12 @@ export function ConversationSidebar({
           >
             LiteChat
           </Link>
-          <button
-            type="button"
-            aria-label="Start a new conversation"
-            disabled={pending}
-            onClick={() =>
-              startTransition(() => startConversation(models[0].id))
-            }
+          <NewConversationButton
+            ariaLabel="Start a new conversation"
             className="flex size-9 items-center justify-center rounded-lg bg-primary text-2xl leading-none text-white hover:bg-primary/90 disabled:opacity-50"
           >
             +
-          </button>
+          </NewConversationButton>
         </div>
 
         <nav aria-label="Conversations" className="flex-1 overflow-y-auto p-2">
