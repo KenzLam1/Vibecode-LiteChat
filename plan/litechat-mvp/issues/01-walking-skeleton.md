@@ -8,12 +8,22 @@ See spec: `plan/litechat-mvp/spec.md` (Modules: Model catalog, Providers, Curren
 
 **Status:** ready-for-agent
 
-- [ ] `npm run dev` serves a page where typing a message streams a reply from one model
-- [ ] Model calls use `maxOutputTokens` ≥ 800 and the AI SDK's default retries
-- [ ] API keys are read only on the server and never reach the browser
-- [ ] The model catalog is the only list of models; the UI reads display names from it
-- [ ] Migrations create `users`, `login_sessions`, `conversations`, `messages` as in the spec, with random text IDs and foreign keys enforced
-- [ ] The database path comes from `DATABASE_PATH`
-- [ ] `requireUser()` exists and returns a seeded user
-- [ ] The smoke script streams "hi" from all three routes, reports which routes surface reasoning parts, and reports the largest prompt the proxy accepted
-- [ ] `npm test` runs Vitest (even with no tests yet)
+- [x] `npm run dev` serves a page where typing a message streams a reply from one model
+- [x] Model calls use `maxOutputTokens` ≥ 800 and the AI SDK's default retries
+- [x] API keys are read only on the server and never reach the browser
+- [x] The model catalog is the only list of models; the UI reads display names from it
+- [x] Migrations create `users`, `login_sessions`, `conversations`, `messages` as in the spec, with random text IDs and foreign keys enforced
+- [x] The database path comes from `DATABASE_PATH`
+- [x] `requireUser()` exists and returns a seeded user
+- [x] The smoke script streams "hi" from all three routes, reports which routes surface reasoning parts, and reports the largest prompt the proxy accepted
+- [x] `npm test` runs Vitest (even with no tests yet)
+
+## Comments
+
+**2026-09-29 — implemented.** Findings from the smoke script and manual checks:
+
+- **Reasoning:** Claude and Gemini surface reasoning parts once asked. Claude needs `thinking: { type: "adaptive" }` (the proxy rejects `budget_tokens`); Gemini needs `thinkingConfig: { includeThoughts: true }`. Both live in the Providers module. ChatGPT does **not** surface reasoning: the proxy streams it as Responses `reasoning_text` events that `@ai-sdk/openai` ignores, so ChatGPT gets the timer-only fallback (ticket 07).
+- **OpenAI route must use the Responses API.** Chat Completions rejects `max_completion_tokens` ("unsupported at this implementation milestone").
+- **Earlier turns must go back as plain text.** If assistant parts keep their provider metadata, the Responses client sends them as `item_reference`s and the stateless proxy answers "unsupported message role". `store: false` doesn't help: it adds `include`, which the proxy also rejects. The context builder must send text only (it already drops reasoning).
+- **Context probe:** the proxy accepted ~256k estimated tokens (1000 KiB prompt; 227,770 input tokens counted by the provider), the probe's default ceiling. One earlier run failed at ~128k with "invalid or oversized JSON body" after 82s, then the same size passed on the next run, so it was a flaky failure, not the limit. The 100k-token starting budget is comfortably inside what the proxy accepts.
+- Characters ÷ 4 overestimates tokens by about 12% on English filler text.
