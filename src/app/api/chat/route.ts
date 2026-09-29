@@ -1,44 +1,47 @@
-import { convertToModelMessages, streamText, type UIMessage } from "ai";
+import { createUIMessageStreamResponse } from "ai";
+import { z } from "zod";
 
-import { models } from "@/lib/models";
+import { conversationService, ConversationError } from "@/server/conversations";
 import { requireUser } from "@/server/current-user";
-import {
-  REPLY_MAX_OUTPUT_TOKENS,
-  modelCall,
-  proxyRequestId,
-} from "@/server/providers";
 
-// Walking skeleton: talks to the first catalog model and keeps nothing. The
-// conversation service replaces this body once conversations are persisted.
+// The browser sends only what's new; the history always comes from the
+// database, never from the client.
+const body = z.discriminatedUnion("trigger", [
+  z.object({
+    trigger: z.literal("submit-message"),
+    conversationId: z.string(),
+    text: z.string(),
+  }),
+  z.object({
+    trigger: z.literal("regenerate-message"),
+    conversationId: z.string(),
+  }),
+]);
+
 export async function POST(request: Request) {
-  await requireUser();
-  const { messages }: { messages: UIMessage[] } = await request.json();
-  const model = models[0];
+  const user = await requireUser();
+  const parsed = body.safeParse(await request.json().catch(() => null));
+  if (!parsed.success) {
+    return new Response("Bad request.", { status: 400 });
+  }
+  const input = parsed.data;
+  const conversations = conversationService();
 
-  // Only text goes back to the model: reasoning is shown to the user but never
-  // resent, and provider metadata would make the OpenAI route send item
-  // references the proxy can't resolve.
-  const textOnly = messages.map((message) => ({
-    ...message,
-    parts: message.parts.flatMap((part) =>
-      part.type === "text" ? [{ type: "text" as const, text: part.text }] : [],
-    ),
-  }));
-
-  const result = streamText({
-    ...modelCall(model),
-    messages: await convertToModelMessages(textOnly),
-    maxOutputTokens: REPLY_MAX_OUTPUT_TOKENS,
-  });
-
-  return result.toUIMessageStreamResponse({
-    onError: (error) => {
-      const requestId = proxyRequestId(error);
-      console.error(
-        `[chat] ${model.id} reply failed${requestId ? ` (x-request-id ${requestId})` : ""}:`,
-        error,
-      );
-      return `${model.displayName} didn't answer. Please try again.`;
-    },
-  });
+  try {
+    const reply =
+      input.trigger === "submit-message"
+        ? await conversations.send(user, input.conversationId, {
+            text: input.text,
+          })
+        : await conversations.regenerate(user, input.conversationId);
+    return createUIMessageStreamResponse({ stream: reply.stream });
+  } catch (error) {
+    if (error instanceof ConversationError) {
+      // useChat shows a failed response's body text as the error message.
+      return new Response(error.message, {
+        status: error.reason === "not-found" ? 404 : 400,
+      });
+    }
+    throw error;
+  }
 }

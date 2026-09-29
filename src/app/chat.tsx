@@ -1,14 +1,48 @@
 "use client";
 
 import { useChat } from "@ai-sdk/react";
+import { DefaultChatTransport } from "ai";
 import { useState } from "react";
 
 import type { CatalogModel } from "@/lib/models";
+import type { ChatMessage } from "@/server/db/schema";
 
-export function Chat({ model }: { model: CatalogModel }) {
-  const { messages, sendMessage, status, error } = useChat();
+import { TryAgainPlaceholder } from "./try-again-placeholder";
+
+// The server keeps the history, so a request carries only what's new: the
+// text of a sent message, or which conversation to regenerate.
+const transport = new DefaultChatTransport<ChatMessage>({
+  api: "/api/chat",
+  prepareSendMessagesRequest: ({ id, messages, trigger }) => {
+    if (trigger === "regenerate-message") {
+      return { body: { trigger, conversationId: id } };
+    }
+    const text = (messages.at(-1)?.parts ?? [])
+      .flatMap((part) => (part.type === "text" ? [part.text] : []))
+      .join("");
+    return { body: { trigger, conversationId: id, text } };
+  },
+});
+
+export function Chat({
+  conversationId,
+  model,
+  initialMessages,
+}: {
+  conversationId: string;
+  model: CatalogModel;
+  initialMessages: ChatMessage[];
+}) {
+  const { messages, sendMessage, regenerate, status, error } =
+    useChat<ChatMessage>({
+      id: conversationId,
+      messages: initialMessages,
+      transport,
+    });
   const [input, setInput] = useState("");
   const busy = status === "submitted" || status === "streaming";
+  // A reopened conversation whose last message never got an answer.
+  const unanswered = status === "ready" && messages.at(-1)?.role === "user";
 
   function send() {
     const text = input.trim();
@@ -48,6 +82,7 @@ export function Chat({ model }: { model: CatalogModel }) {
             )}
           </div>
         ))}
+        {unanswered && <TryAgainPlaceholder onClick={() => regenerate()} />}
         {status === "submitted" && (
           <p className="text-sm text-gray-500">Thinking…</p>
         )}
