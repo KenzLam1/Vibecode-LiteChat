@@ -1,0 +1,345 @@
+import { MockLanguageModelV3, simulateReadableStream } from "ai/test";
+import { beforeEach, describe, expect, it } from "vitest";
+
+import type { CurrentUser } from "@/server/current-user";
+import { createDb, type Db } from "@/server/db";
+import { users } from "@/server/db/schema";
+
+import {
+  ConversationError,
+  createConversationService,
+  type ConversationService,
+} from "./service";
+
+// Seam 1: the Conversation service, against a fresh in-memory database and
+// the AI SDK mock model.
+
+type LanguageModelV3StreamPart = Awaited<
+  ReturnType<MockLanguageModelV3["doStream"]>
+>["stream"] extends ReadableStream<infer Part>
+  ? Part
+  : never;
+
+type Script =
+  | { reply: string; reasoning?: string }
+  | { failBeforeFirstToken: true }
+  | { failAfter: string };
+
+const usage = {
+  inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+  outputTokens: { total: 1, text: 1, reasoning: 0 },
+};
+
+function chunksFor(script: Script): LanguageModelV3StreamPart[] {
+  if ("failAfter" in script) {
+    return [
+      { type: "text-start", id: "t" },
+      { type: "text-delta", id: "t", delta: script.failAfter },
+      { type: "error", error: new Error("upstream request failed") },
+    ];
+  }
+  if (!("reply" in script)) return [];
+  const reasoning: LanguageModelV3StreamPart[] = script.reasoning
+    ? [
+        { type: "reasoning-start", id: "r" },
+        { type: "reasoning-delta", id: "r", delta: script.reasoning },
+        { type: "reasoning-end", id: "r" },
+      ]
+    : [];
+  return [
+    ...reasoning,
+    { type: "text-start", id: "t" },
+    { type: "text-delta", id: "t", delta: script.reply },
+    { type: "text-end", id: "t" },
+    { type: "finish", usage, finishReason: { unified: "stop", raw: "stop" } },
+  ];
+}
+
+// A mock model that plays one script per call, in order.
+function scriptedModel(...scripts: Script[]) {
+  let call = 0;
+  return new MockLanguageModelV3({
+    doStream: async () => {
+      const script = scripts[call++];
+      if (!script) throw new Error("The mock model has no script left");
+      if ("failBeforeFirstToken" in script) {
+        throw new Error("connection timed out");
+      }
+      return {
+        stream: simulateReadableStream({
+          chunks: chunksFor(script),
+          chunkDelayInMs: 1,
+        }),
+      };
+    },
+  });
+}
+
+// Reads everything, like a browser that stays connected.
+async function drain<T>(stream: ReadableStream<T>): Promise<T[]> {
+  const chunks: T[] = [];
+  const reader = stream.getReader();
+  for (let next = await reader.read(); !next.done; next = await reader.read()) {
+    chunks.push(next.value);
+  }
+  return chunks;
+}
+
+function textOf(message: { parts: { type: string; text?: string }[] }) {
+  return message.parts
+    .flatMap((part) => (part.type === "text" ? [part.text] : []))
+    .join("");
+}
+
+let db: Db;
+let alice: CurrentUser;
+let bob: CurrentUser;
+let model: MockLanguageModelV3;
+let clock: number;
+let service: ConversationService;
+
+function addUser(username: string): CurrentUser {
+  return db
+    .insert(users)
+    .values({ username, passwordHash: "!" })
+    .returning({ id: users.id, username: users.username })
+    .get();
+}
+
+// Every service call sees a clock that has moved on by one second.
+function useModel(next: MockLanguageModelV3) {
+  model = next;
+  service = createConversationService({
+    db,
+    modelFor: () => ({ model }),
+    now: () => new Date((clock += 1000)),
+  });
+}
+
+beforeEach(() => {
+  db = createDb(":memory:");
+  alice = addUser("alice");
+  bob = addUser("bob");
+  clock = Date.UTC(2026, 8, 29);
+  useModel(scriptedModel());
+});
+
+describe("start and open", () => {
+  it("opens a new conversation with no messages", async () => {
+    const conversation = await service.start(alice, "claude");
+
+    const opened = await service.open(alice, conversation.id);
+
+    expect(opened?.conversation).toMatchObject({
+      id: conversation.id,
+      modelId: "claude",
+    });
+    expect(opened?.messages).toEqual([]);
+  });
+});
+
+describe("send", () => {
+  it("saves the user message and the finished reply", async () => {
+    useModel(scriptedModel({ reply: "Hello there!" }));
+    const { id } = await service.start(alice, "claude");
+
+    const reply = await service.send(alice, id, { text: "Hi" });
+    await drain(reply.stream);
+    await reply.done;
+
+    const { messages } = (await service.open(alice, id))!;
+    expect(messages.map((m) => [m.role, textOf(m)])).toEqual([
+      ["user", "Hi"],
+      ["assistant", "Hello there!"],
+    ]);
+  });
+
+  it("saves a finished reply even if the browser disconnects mid-stream", async () => {
+    useModel(scriptedModel({ reply: "Still here." }));
+    const { id } = await service.start(alice, "claude");
+
+    const reply = await service.send(alice, id, { text: "Hi" });
+    await reply.stream.cancel();
+    await reply.done;
+
+    const { messages } = (await service.open(alice, id))!;
+    expect(messages.map(textOf)).toEqual(["Hi", "Still here."]);
+  });
+
+  it("keeps the reply's reasoning with the saved message", async () => {
+    useModel(scriptedModel({ reasoning: "They said hi.", reply: "Hello!" }));
+    const { id } = await service.start(alice, "claude");
+
+    const reply = await service.send(alice, id, { text: "Hi" });
+    await drain(reply.stream);
+    await reply.done;
+
+    const { messages } = (await service.open(alice, id))!;
+    expect(messages[1].parts).toContainEqual(
+      expect.objectContaining({ type: "reasoning", text: "They said hi." }),
+    );
+  });
+
+  it("keeps the user message but saves nothing when the reply fails before the first token", async () => {
+    useModel(scriptedModel({ failBeforeFirstToken: true }));
+    const { id } = await service.start(alice, "claude");
+
+    const reply = await service.send(alice, id, { text: "Hi" });
+    await drain(reply.stream);
+    await reply.done;
+
+    const { messages } = (await service.open(alice, id))!;
+    expect(messages.map((m) => [m.role, textOf(m)])).toEqual([["user", "Hi"]]);
+  });
+
+  it("keeps the user message but saves nothing when the reply fails after the first token", async () => {
+    useModel(scriptedModel({ failAfter: "Half an ans" }));
+    const { id } = await service.start(alice, "claude");
+
+    const reply = await service.send(alice, id, { text: "Hi" });
+    await drain(reply.stream);
+    await reply.done;
+
+    const { messages } = (await service.open(alice, id))!;
+    expect(messages.map((m) => [m.role, textOf(m)])).toEqual([["user", "Hi"]]);
+  });
+
+  it("tells the browser the reply failed", async () => {
+    useModel(scriptedModel({ failBeforeFirstToken: true }));
+    const { id } = await service.start(alice, "claude");
+
+    const reply = await service.send(alice, id, { text: "Hi" });
+    const chunks = await drain(reply.stream);
+
+    expect(chunks).toContainEqual({
+      type: "error",
+      errorText: "Claude didn't answer. Please try again.",
+    });
+  });
+
+  it("sends earlier turns back as text only, without their reasoning", async () => {
+    useModel(
+      scriptedModel(
+        { reasoning: "Secret thoughts", reply: "First answer" },
+        { reply: "Second answer" },
+      ),
+    );
+    const { id } = await service.start(alice, "claude");
+    for (const text of ["First question", "Second question"]) {
+      const reply = await service.send(alice, id, { text });
+      await drain(reply.stream);
+      await reply.done;
+    }
+
+    const prompt = model.doStreamCalls[1].prompt;
+    expect(prompt).toEqual([
+      { role: "user", content: [{ type: "text", text: "First question" }] },
+      { role: "assistant", content: [{ type: "text", text: "First answer" }] },
+      { role: "user", content: [{ type: "text", text: "Second question" }] },
+    ]);
+  });
+
+  it("bumps the conversation's updated_at for every saved message", async () => {
+    useModel(scriptedModel({ reply: "Hello!" }, { failBeforeFirstToken: true }));
+    const { id, updatedAt: created } = await service.start(alice, "claude");
+
+    const first = await service.send(alice, id, { text: "Hi" });
+    const afterUserMessage = (await service.open(alice, id))!.conversation
+      .updatedAt;
+    await drain(first.stream);
+    await first.done;
+    const afterReply = (await service.open(alice, id))!.conversation.updatedAt;
+
+    expect(afterUserMessage.getTime()).toBeGreaterThan(created.getTime());
+    expect(afterReply.getTime()).toBeGreaterThan(afterUserMessage.getTime());
+
+    const failed = await service.send(alice, id, { text: "Again?" });
+    const afterSecondMessage = (await service.open(alice, id))!.conversation
+      .updatedAt;
+    await drain(failed.stream);
+    await failed.done;
+    const afterFailure = (await service.open(alice, id))!.conversation
+      .updatedAt;
+
+    expect(afterSecondMessage.getTime()).toBeGreaterThan(afterReply.getTime());
+    expect(afterFailure).toEqual(afterSecondMessage);
+  });
+});
+
+describe("regenerate", () => {
+  it("replays the saved, unanswered user message and saves the new reply", async () => {
+    useModel(
+      scriptedModel({ failBeforeFirstToken: true }, { reply: "Got it now." }),
+    );
+    const { id } = await service.start(alice, "claude");
+    const failed = await service.send(alice, id, { text: "Hi" });
+    await drain(failed.stream);
+    await failed.done;
+
+    const reply = await service.regenerate(alice, id);
+    await drain(reply.stream);
+    await reply.done;
+
+    expect(model.doStreamCalls[1].prompt).toEqual([
+      { role: "user", content: [{ type: "text", text: "Hi" }] },
+    ]);
+    const { messages } = (await service.open(alice, id))!;
+    expect(messages.map((m) => [m.role, textOf(m)])).toEqual([
+      ["user", "Hi"],
+      ["assistant", "Got it now."],
+    ]);
+  });
+
+  it("is rejected when the last message already has an answer", async () => {
+    useModel(scriptedModel({ reply: "Hello!" }));
+    const { id } = await service.start(alice, "claude");
+    const reply = await service.send(alice, id, { text: "Hi" });
+    await drain(reply.stream);
+    await reply.done;
+
+    await expect(service.regenerate(alice, id)).rejects.toMatchObject({
+      reason: "rejected",
+    });
+    expect(model.doStreamCalls).toHaveLength(1);
+  });
+});
+
+describe("ownership", () => {
+  it("does not open another user's conversation", async () => {
+    const { id } = await service.start(alice, "claude");
+
+    expect(await service.open(bob, id)).toBeNull();
+  });
+
+  it("does not send to another user's conversation", async () => {
+    useModel(scriptedModel({ reply: "Hello!" }));
+    const { id } = await service.start(alice, "claude");
+
+    const attempt = service.send(bob, id, { text: "Let me in" });
+
+    await expect(attempt).rejects.toBeInstanceOf(ConversationError);
+    await expect(attempt).rejects.toMatchObject({ reason: "not-found" });
+    expect(model.doStreamCalls).toHaveLength(0);
+    expect((await service.open(alice, id))!.messages).toEqual([]);
+  });
+
+  it("does not regenerate another user's conversation", async () => {
+    useModel(scriptedModel({ failBeforeFirstToken: true }, { reply: "Hi" }));
+    const { id } = await service.start(alice, "claude");
+    const failed = await service.send(alice, id, { text: "Hi" });
+    await drain(failed.stream);
+    await failed.done;
+
+    await expect(service.regenerate(bob, id)).rejects.toMatchObject({
+      reason: "not-found",
+    });
+    expect(model.doStreamCalls).toHaveLength(1);
+  });
+
+  it("treats an unknown id as not found", async () => {
+    expect(await service.open(alice, "no-such-id")).toBeNull();
+    await expect(
+      service.send(alice, "no-such-id", { text: "Hi" }),
+    ).rejects.toMatchObject({ reason: "not-found" });
+  });
+});

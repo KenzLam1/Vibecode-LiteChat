@@ -1,0 +1,42 @@
+import "server-only";
+
+import { getDb } from "@/server/db";
+import {
+  REPLY_MAX_OUTPUT_TOKENS,
+  modelCall,
+  proxyRequestId,
+} from "@/server/providers";
+
+import {
+  createConversationService,
+  type ConversationService,
+} from "./service";
+
+export {
+  ConversationError,
+  type Conversation,
+  type ConversationService,
+  type OpenConversation,
+  type Reply,
+} from "./service";
+
+// The app's Conversation service: the real database and the proxy models.
+let service: ConversationService | undefined;
+
+export function conversationService(): ConversationService {
+  service ??= createConversationService({
+    db: getDb(),
+    modelFor: (model) => ({
+      ...modelCall(model),
+      maxOutputTokens: REPLY_MAX_OUTPUT_TOKENS,
+    }),
+    onReplyError: (error, model) => {
+      const requestId = proxyRequestId(error);
+      console.error(
+        `[chat] ${model.id} reply failed${requestId ? ` (x-request-id ${requestId})` : ""}:`,
+        error,
+      );
+    },
+  });
+  return service;
+}
