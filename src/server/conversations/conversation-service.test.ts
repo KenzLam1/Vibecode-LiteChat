@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import type { CurrentUser } from "@/server/current-user";
 import { createDb, type Db } from "@/server/db";
-import { users } from "@/server/db/schema";
+import { messages, users } from "@/server/db/schema";
 
 import {
   ConversationError,
@@ -164,6 +164,49 @@ describe("start and open", () => {
       modelId: "claude",
     });
     expect(opened?.messages).toEqual([]);
+  });
+});
+
+describe("list", () => {
+  it("lists only the user's conversations by newest activity", async () => {
+    const older = await service.start(alice, "claude");
+    await service.start(bob, "claude");
+    const newer = await service.start(alice, "gemini");
+
+    expect((await service.list(alice)).map(({ id }) => id)).toEqual([
+      newer.id,
+      older.id,
+    ]);
+  });
+});
+
+describe("rename", () => {
+  it("renames a conversation and keeps the new title", async () => {
+    const conversation = await service.start(alice, "claude");
+
+    await service.rename(alice, conversation.id, "Research notes");
+
+    expect((await service.open(alice, conversation.id))?.conversation).toMatchObject(
+      {
+        title: "Research notes",
+        titleSource: "user",
+      },
+    );
+  });
+});
+
+describe("delete", () => {
+  it("deletes a conversation and cascades to its messages", async () => {
+    useModel(scriptedModel({ reply: "Hello!" }));
+    const conversation = await service.start(alice, "claude");
+    const reply = await service.send(alice, conversation.id, { text: "Hi" });
+    await drain(reply.stream);
+    await reply.done;
+
+    await service.delete(alice, conversation.id);
+
+    expect(await service.open(alice, conversation.id)).toBeNull();
+    expect(db.select().from(messages).all()).toEqual([]);
   });
 });
 
@@ -395,6 +438,21 @@ describe("ownership", () => {
       reason: "not-found",
     });
     expect(model.doStreamCalls).toHaveLength(1);
+  });
+
+  it("does not rename or delete another user's conversation", async () => {
+    const conversation = await service.start(alice, "claude");
+
+    await expect(
+      service.rename(bob, conversation.id, "Taken over"),
+    ).rejects.toMatchObject({ reason: "not-found" });
+    await expect(service.delete(bob, conversation.id)).rejects.toMatchObject({
+      reason: "not-found",
+    });
+
+    expect((await service.open(alice, conversation.id))?.conversation.title).toBe(
+      "New conversation",
+    );
   });
 
   it("treats an unknown id as not found", async () => {

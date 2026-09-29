@@ -1,5 +1,10 @@
 import type { Metadata } from "next";
 import { Fredoka, Inter } from "next/font/google";
+
+import { conversationService } from "@/server/conversations";
+import { requireUser } from "@/server/current-user";
+
+import { ConversationSidebar } from "./components/conversation-sidebar";
 import "./globals.css";
 
 const inter = Inter({
@@ -17,13 +22,21 @@ export const metadata: Metadata = {
   description: "Chat with ChatGPT, Claude and Gemini in one place",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default async function RootLayout({ children }: LayoutProps<"/">) {
+  const user = await requireUser();
+  const conversations = await conversationService().list(user);
+
   return (
     <html
       lang="en"
       className={`${inter.variable} ${fredoka.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full">
+        <div className="flex min-h-dvh">
+          <ConversationSidebar initialConversations={conversations} />
+          <div className="min-w-0 flex-1">{children}</div>
+        </div>
+      </body>
     </html>
   );
 }

@@ -1,4 +1,4 @@
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, sql } from "drizzle-orm";
 import {
   readUIMessageStream,
   streamText,
@@ -247,6 +247,15 @@ export function createConversationService({
   }
 
   return {
+    async list(user: CurrentUser): Promise<Conversation[]> {
+      return db
+        .select()
+        .from(conversations)
+        .where(eq(conversations.userId, user.id))
+        .orderBy(desc(conversations.updatedAt), desc(conversations.createdAt))
+        .all();
+    },
+
     async start(user: CurrentUser, modelId: string): Promise<Conversation> {
       if (!findModel(modelId)) {
         throw new ConversationError("rejected", "That model isn't available.");
@@ -269,6 +278,35 @@ export function createConversationService({
       const conversation = findOwned(user, id);
       if (!conversation) return null;
       return { conversation, messages: history(conversation.id) };
+    },
+
+    async rename(
+      user: CurrentUser,
+      id: string,
+      title: string,
+    ): Promise<Conversation> {
+      requireOwned(user, id);
+      const nextTitle = title.trim();
+      if (!nextTitle) {
+        throw new ConversationError("rejected", "Enter a conversation title.");
+      }
+      return db
+        .update(conversations)
+        .set({ title: nextTitle, titleSource: "user" })
+        .where(
+          and(eq(conversations.id, id), eq(conversations.userId, user.id)),
+        )
+        .returning()
+        .get();
+    },
+
+    async delete(user: CurrentUser, id: string): Promise<void> {
+      requireOwned(user, id);
+      db.delete(conversations)
+        .where(
+          and(eq(conversations.id, id), eq(conversations.userId, user.id)),
+        )
+        .run();
     },
 
     // Saves the user's message before the model is called, then streams the

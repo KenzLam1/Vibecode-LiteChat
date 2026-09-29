@@ -57,14 +57,6 @@ export function Chat({
 
   return (
     <div className="flex h-dvh w-full flex-col">
-      <header className="border-b border-gray-200 bg-white">
-        <div className="mx-auto flex w-full max-w-3xl items-center px-4 py-3">
-          <h1 className="font-display text-2xl font-semibold text-primary">
-            LiteChat
-          </h1>
-        </div>
-      </header>
-
       <main className="flex-1 overflow-y-auto">
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 py-6">
           {messages.length === 0 && (

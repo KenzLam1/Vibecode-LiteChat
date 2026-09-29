@@ -1,30 +1,19 @@
-import { redirect } from "next/navigation";
-
 import { models } from "@/lib/models";
-import { conversationService } from "@/server/conversations";
-import { requireUser } from "@/server/current-user";
-
-// TODO(ticket 05): the Select a Model dialog picks the model; until then new
-// conversations use the first catalog model.
-async function startConversation() {
-  "use server";
-  const user = await requireUser();
-  const conversation = await conversationService().start(user, models[0].id);
-  redirect(`/c/${conversation.id}`);
-}
+import { startConversation } from "./conversation-actions";
 
 export default function Home() {
+  const startDefaultConversation = startConversation.bind(null, models[0].id);
   return (
-    <main className="m-auto flex flex-col items-center gap-6 p-4">
-      <h1 className="font-display text-3xl font-semibold text-primary">
-        LiteChat
-      </h1>
-      <form action={startConversation}>
+    <main className="flex min-h-dvh items-center justify-center p-6">
+      <form action={startDefaultConversation}>
         <button
           type="submit"
-          className="rounded-xl bg-primary px-5 py-3 font-medium text-white"
+          className="flex min-h-52 w-full max-w-lg flex-col items-center justify-center gap-4 rounded-3xl border-2 border-dashed border-primary/40 bg-white px-12 py-10 text-primary shadow-sm transition hover:border-primary hover:bg-primary/5"
         >
-          Start a new conversation
+          <span aria-hidden className="text-5xl leading-none">+</span>
+          <span className="font-display text-2xl font-semibold">
+            Start a new conversation
+          </span>
         </button>
       </form>
     </main>
