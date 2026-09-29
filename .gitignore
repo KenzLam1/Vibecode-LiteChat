@@ -3,6 +3,8 @@
 node_modules/
 .next/
 *.db
+# Exported chat transcripts; they contain the API keys
+transcripts/
 # SQLite database and its WAL/journal files
 /data/
 *.db-*
