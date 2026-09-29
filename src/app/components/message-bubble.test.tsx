@@ -97,3 +97,40 @@ describe("MessageBubble reasoning", () => {
     expect(details.open).toBe(true);
   });
 });
+
+describe("MessageBubble completion state", () => {
+  it("warns when a persisted answer reached the output limit", () => {
+    const message: ChatMessage = {
+      id: "message-5",
+      role: "assistant",
+      parts: [
+        {
+          type: "data-completion",
+          data: { incomplete: true, finishReason: "length" },
+        },
+        { type: "text", text: "A useful partial answer." },
+      ],
+    };
+
+    render(<MessageBubble message={message} />);
+
+    expect(screen.getByText("A useful partial answer.")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "This response may be incomplete because the model reached its output limit.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("does not warn for a normal completed answer", () => {
+    const message: ChatMessage = {
+      id: "message-6",
+      role: "assistant",
+      parts: [{ type: "text", text: "A complete answer." }],
+    };
+
+    render(<MessageBubble message={message} />);
+
+    expect(screen.queryByText(/may be incomplete/i)).toBeNull();
+  });
+});

@@ -24,6 +24,7 @@ const body = z.discriminatedUnion("trigger", [
   z.object({
     trigger: z.literal("regenerate-message"),
     conversationId: z.string(),
+    recovery: z.literal("concise").optional(),
   }),
 ]);
 
@@ -60,7 +61,9 @@ export async function POST(request: Request) {
               };
             }),
           })
-        : await conversations.regenerate(user, input.conversationId);
+        : await conversations.regenerate(user, input.conversationId, {
+            recovery: input.recovery,
+          });
     return createUIMessageStreamResponse({ stream: reply.stream });
   } catch (error) {
     if (error instanceof ConversationError) {

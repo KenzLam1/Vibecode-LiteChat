@@ -9,27 +9,27 @@ unchanged.
 
 **Status:** ready-for-agent
 
-- [ ] A `length` finish containing nonblank answer text saves the assistant
+- [x] A `length` finish containing nonblank answer text saves the assistant
       message instead of treating it as an answerless failure.
-- [ ] The saved message carries persistent completion data indicating that the
+- [x] The saved message carries persistent completion data indicating that the
       answer reached the model's output limit.
-- [ ] The partial answer remains readable and displays a clear warning that it
+- [x] The partial answer remains readable and displays a clear warning that it
       may be incomplete.
-- [ ] The incomplete warning and partial answer remain visible after reopening
+- [x] The incomplete warning and partial answer remain visible after reopening
       or refreshing the conversation.
-- [ ] A normal `stop` finish containing answer text saves and renders without
+- [x] A normal `stop` finish containing answer text saves and renders without
       an incomplete warning.
-- [ ] Reasoning attached to either a complete or incomplete answer retains its
+- [x] Reasoning attached to either a complete or incomplete answer retains its
       existing collapsed and persisted behavior.
-- [ ] An incomplete saved answer participates in automatic title generation
+- [x] An incomplete saved answer participates in automatic title generation
       under the existing title rules.
-- [ ] Output-limit diagnostics record the model identifier, `length` finish
+- [x] Output-limit diagnostics record the model identifier, `length` finish
       reason, answer presence, and output usage when available without logging
       conversation content or secrets.
-- [ ] The incomplete marker uses the existing message-parts persistence shape
+- [x] The incomplete marker uses the existing message-parts persistence shape
       and requires no SQLite schema migration.
-- [ ] Conversation-module tests cover saving and reopening an output-limited
+- [x] Conversation-module tests cover saving and reopening an output-limited
       partial answer and distinguish it from a normal completed answer.
-- [ ] Message-rendering tests verify that incomplete replies show the warning
+- [x] Message-rendering tests verify that incomplete replies show the warning
       and normal replies do not.
-- [ ] The full existing test, typecheck, lint, and build checks pass.
+- [x] The full existing test, typecheck, lint, and build checks pass.

@@ -2,7 +2,9 @@ import { and, asc, desc, eq, sql } from "drizzle-orm";
 import {
   readUIMessageStream,
   streamText,
+  type FinishReason,
   type InferUIMessageChunk,
+  type LanguageModelUsage,
 } from "ai";
 
 import { findModel, type CatalogModel } from "@/lib/models";
@@ -53,6 +55,8 @@ export type Reply = {
   droppedContext: boolean;
 };
 
+export type ReplyRecovery = "concise";
+
 export class ConversationError extends Error {
   constructor(
     // "not-found": missing, or someone else's. "rejected": the request can't
@@ -62,6 +66,48 @@ export class ConversationError extends Error {
   ) {
     super(message);
     this.name = "ConversationError";
+  }
+}
+
+type SafeReplyUsage = {
+  inputTokens?: number;
+  outputTokens?: number;
+  textTokens?: number;
+  reasoningTokens?: number;
+  totalTokens?: number;
+};
+
+export class ReplyTerminalError extends Error {
+  readonly details: {
+    modelId: string;
+    finishReason: FinishReason;
+    hasAnswer: boolean;
+    recovery: "standard" | ReplyRecovery;
+    usage: SafeReplyUsage;
+  };
+
+  constructor(
+    modelId: string,
+    finishReason: FinishReason,
+    hasAnswer: boolean,
+    usage: LanguageModelUsage,
+    recovery?: ReplyRecovery,
+  ) {
+    super("The model reply ended in an abnormal terminal state.");
+    this.name = "ReplyTerminalError";
+    this.details = {
+      modelId,
+      finishReason,
+      hasAnswer,
+      recovery: recovery ?? "standard",
+      usage: {
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        textTokens: usage.outputTokenDetails.textTokens,
+        reasoningTokens: usage.outputTokenDetails.reasoningTokens,
+        totalTokens: usage.totalTokens,
+      },
+    };
   }
 }
 
@@ -96,6 +142,8 @@ export type ActiveReplyRegistry = Map<
 export type ConversationService = ReturnType<typeof createConversationService>;
 
 const NEW_CONVERSATION_TITLE = "New conversation";
+const CONCISE_RECOVERY_INSTRUCTION =
+  "For this retry, answer the user's request directly and concisely. Avoid extended reasoning. If the request is too large, provide the smallest useful first step and state what remains.";
 
 // A proxy connection can open and then never answer. Long enough for a slow
 // model to reason before its first token; well short of the ~5 minutes the
@@ -195,6 +243,87 @@ export function createConversationService({
     });
   }
 
+  function setReplyFailure(
+    conversationId: string,
+    messageId: string,
+    failed: boolean,
+  ) {
+    const message = db
+      .select({ role: messages.role, parts: messages.parts })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.id, messageId),
+          eq(messages.conversationId, conversationId),
+        ),
+      )
+      .get();
+    if (message?.role !== "user") return;
+
+    const parts: ChatMessage["parts"] = message.parts.filter(
+      (part) => part.type !== "data-replyFailure",
+    );
+    if (failed) {
+      parts.push({
+        type: "data-replyFailure",
+        data: { reason: "response-budget", recovery: "concise" },
+      });
+    }
+    db.update(messages)
+      .set({ parts })
+      .where(
+        and(
+          eq(messages.id, messageId),
+          eq(messages.conversationId, conversationId),
+        ),
+      )
+      .run();
+  }
+
+  function settingsForRecovery(
+    model: CatalogModel,
+    settings: ModelSettings,
+    recovery?: ReplyRecovery,
+  ): ModelSettings {
+    if (recovery !== "concise") return settings;
+    const providerOptions = settings.providerOptions ?? {};
+    if (model.route === "anthropic") {
+      return {
+        ...settings,
+        providerOptions: {
+          ...providerOptions,
+          anthropic: { ...providerOptions.anthropic, effort: "low" },
+        },
+      };
+    }
+    if (model.route === "google") {
+      const google = providerOptions.google ?? {};
+      const thinkingConfig =
+        "thinkingConfig" in google &&
+        typeof google.thinkingConfig === "object" &&
+        google.thinkingConfig !== null
+          ? google.thinkingConfig
+          : {};
+      return {
+        ...settings,
+        providerOptions: {
+          ...providerOptions,
+          google: {
+            ...google,
+            thinkingConfig: { ...thinkingConfig, thinkingLevel: "low" },
+          },
+        },
+      };
+    }
+    return {
+      ...settings,
+      providerOptions: {
+        ...providerOptions,
+        openai: { ...providerOptions.openai, reasoningEffort: "low" },
+      },
+    };
+  }
+
   // Reads the server's copy of the reply to the end and saves it only if it
   // finished; a reply that failed at any point saves nothing.
   async function saveWhenFinished(
@@ -230,12 +359,16 @@ export function createConversationService({
     user: CurrentUser,
     conversation: Conversation,
     model: CatalogModel,
+    replyToMessageId: string,
     preparedContext?: BuiltContext,
+    recovery?: ReplyRecovery,
   ): Promise<Reply> {
     const failedText = `${model.displayName} didn't answer. Please try again.`;
+    const outputLimitedText = `${model.displayName} reached its response limit while reasoning and didn't produce an answer. Retrying unchanged may fail again. Try a concise answer or split the request into a smaller first step.`;
     const reasoningStartedAt = performance.now();
     let sawReasoning = false;
     let reasoningFinished = false;
+    let sawAnswer = false;
 
     // Aborts the model call when nothing has arrived for a while, before the
     // first token or between tokens.
@@ -256,13 +389,24 @@ export function createConversationService({
       );
     };
 
+    const standingSystemPrompt = currentSystemPrompt(user);
+    const systemPrompt =
+      recovery === "concise"
+        ? [standingSystemPrompt, CONCISE_RECOVERY_INSTRUCTION]
+            .filter((prompt): prompt is string => Boolean(prompt?.trim()))
+            .join("\n\n")
+        : standingSystemPrompt;
     const context =
       preparedContext ??
       (await buildContext(history(conversation.id), {
         tokenBudget: contextTokenBudget,
-        systemPrompt: currentSystemPrompt(user),
+        systemPrompt,
       }));
-    const modelSettings = modelFor(model);
+    const modelSettings = settingsForRecovery(
+      model,
+      modelFor(model),
+      recovery,
+    );
     resetIdleTimer();
     const result = streamText({
       ...modelSettings,
@@ -270,6 +414,21 @@ export function createConversationService({
       system: context.systemPrompt,
       abortSignal: AbortSignal.any([idle.signal, stopped.signal]),
       onChunk: resetIdleTimer,
+      onFinish: ({ finishReason, text, totalUsage }) => {
+        const hasAnswer = /\S/.test(text);
+        if (!hasAnswer || finishReason === "length") {
+          onReplyError?.(
+            new ReplyTerminalError(
+              model.id,
+              finishReason,
+              hasAnswer,
+              totalUsage,
+              recovery,
+            ),
+            model,
+          );
+        }
+      },
       // Failures are reported once, through the UI stream below.
       onError: () => {},
     });
@@ -303,6 +462,7 @@ export function createConversationService({
             }
             const answerStarted =
               chunk.type === "text-delta" && /\S/.test(chunk.delta);
+            sawAnswer ||= answerStarted;
             const replyEnded =
               chunk.type === "finish" ||
               chunk.type === "abort" ||
@@ -325,6 +485,34 @@ export function createConversationService({
               onReplyError?.(idle.signal.reason, model);
               controller.enqueue({ type: "error", errorText: failedText });
               return;
+            }
+            if (chunk.type === "finish" && !sawAnswer) {
+              const responseBudgetFailure = chunk.finishReason === "length";
+              setReplyFailure(
+                conversation.id,
+                replyToMessageId,
+                responseBudgetFailure,
+              );
+              if (responseBudgetFailure) {
+                controller.enqueue({
+                  type: "data-replyFailure",
+                  data: { reason: "response-budget", recovery: "concise" },
+                });
+              }
+              controller.enqueue({
+                type: "error",
+                errorText:
+                  responseBudgetFailure
+                    ? outputLimitedText
+                    : failedText,
+              });
+              return;
+            }
+            if (chunk.type === "finish" && chunk.finishReason === "length") {
+              controller.enqueue({
+                type: "data-completion",
+                data: { incomplete: true, finishReason: "length" },
+              });
             }
             controller.enqueue(chunk);
           },
@@ -474,11 +662,15 @@ export function createConversationService({
       }
       saveMessage(conversation.id, userMessage);
       if (text) applyFallbackTitle(db, conversation.id, text);
-      return streamReply(user, conversation, model, context);
+      return streamReply(user, conversation, model, userMessage.id, context);
     },
 
     // Streams a new reply to the saved, unanswered last user message.
-    async regenerate(user: CurrentUser, id: string): Promise<Reply> {
+    async regenerate(
+      user: CurrentUser,
+      id: string,
+      options: { recovery?: ReplyRecovery } = {},
+    ): Promise<Reply> {
       const conversation = requireOwned(user, id);
       const model = requireLiveModel(conversation);
       requireNoActiveReply(conversation.id);
@@ -489,7 +681,15 @@ export function createConversationService({
           "There is no unanswered message to try again.",
         );
       }
-      return streamReply(user, conversation, model);
+      setReplyFailure(conversation.id, last.id, false);
+      return streamReply(
+        user,
+        conversation,
+        model,
+        last.id,
+        undefined,
+        options.recovery,
+      );
     },
 
     async stop(user: CurrentUser, id: string): Promise<void> {

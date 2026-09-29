@@ -14,8 +14,12 @@ import {
   MessageBubble,
   hasAnswer,
   hasReasoning,
+  hasResponseBudgetFailure,
 } from "./components/message-bubble";
-import { ReplyError } from "./components/reply-error";
+import {
+  ReplyError,
+  ResponseBudgetRecovery,
+} from "./components/reply-error";
 import { ThinkingTimer } from "./components/thinking-timer";
 import { useToast } from "./components/toast";
 import { TryAgainButton } from "./components/try-again";
@@ -24,9 +28,17 @@ import { TryAgainButton } from "./components/try-again";
 // text of a sent message, or which conversation to regenerate.
 const transport = new DefaultChatTransport<ChatMessage>({
   api: "/api/chat",
-  prepareSendMessagesRequest: ({ id, messages, trigger }) => {
+  prepareSendMessagesRequest: ({ id, messages, trigger, body }) => {
     if (trigger === "regenerate-message") {
-      return { body: { trigger, conversationId: id } };
+      return {
+        body: {
+          trigger,
+          conversationId: id,
+          ...(body?.recovery === "concise"
+            ? { recovery: "concise" as const }
+            : {}),
+        },
+      };
     }
     const text = (messages.at(-1)?.parts ?? [])
       .flatMap((part) => (part.type === "text" ? [part.text] : []))
@@ -102,6 +114,9 @@ export function Chat({
   }, [messages, status]);
   const busy = status === "submitted" || status === "streaming";
   const lastMessage = messages.at(-1);
+  const responseBudgetFailure = Boolean(
+    lastMessage && hasResponseBudgetFailure(lastMessage),
+  );
   // The timer runs from the request until the first answer token; reasoning
   // arriving first doesn't stop it.
   const thinking =
@@ -156,9 +171,18 @@ export function Chat({
               </AssistantBubble>
             )}
             {unanswered && (
-              <div>
-                <TryAgainButton onClick={() => void regenerate()} />
-              </div>
+              responseBudgetFailure ? (
+                <ResponseBudgetRecovery
+                  modelName={model.displayName}
+                  onConciseRetry={() =>
+                    void regenerate({ body: { recovery: "concise" } })
+                  }
+                />
+              ) : (
+                <div>
+                  <TryAgainButton onClick={() => void regenerate()} />
+                </div>
+              )
             )}
             {initialReplyInProgress && status === "ready" && (
               <p className="text-sm text-gray-500" role="status">
@@ -166,7 +190,15 @@ export function Chat({
               </p>
             )}
             {error && !busy && (
-              <ReplyError error={error} onRetry={() => void regenerate()} />
+              <ReplyError
+                error={error}
+                onRetry={() => void regenerate()}
+                responseBudgetFailure={responseBudgetFailure}
+                modelName={model.displayName}
+                onConciseRetry={() =>
+                  void regenerate({ body: { recovery: "concise" } })
+                }
+              />
             )}
           </div>
         </main>

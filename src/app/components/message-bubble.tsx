@@ -70,10 +70,40 @@ function droppedContext(message: UIMessage): boolean {
   );
 }
 
+function incompleteResponse(message: UIMessage): boolean {
+  return message.parts.some(
+    (part) =>
+      part.type === "data-completion" &&
+      (part.data as { incomplete?: boolean; finishReason?: string }).incomplete ===
+        true &&
+      (part.data as { finishReason?: string }).finishReason === "length",
+  );
+}
+
+export function hasResponseBudgetFailure(message: UIMessage): boolean {
+  return message.parts.some(
+    (part) =>
+      part.type === "data-replyFailure" &&
+      (part.data as { reason?: string }).reason === "response-budget",
+  );
+}
+
 function ContextNote() {
   return (
     <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
       Older messages are no longer included in the model&apos;s context.
+    </p>
+  );
+}
+
+function IncompleteResponseNote() {
+  return (
+    <p
+      role="status"
+      className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900"
+    >
+      This response may be incomplete because the model reached its output
+      limit.
     </p>
   );
 }
@@ -144,12 +174,16 @@ export function MessageBubble({ message }: { message: UIMessage }) {
     );
   }
   const contextWasDropped = droppedContext(message);
+  const incomplete = incompleteResponse(message);
   const reasoning = hasReasoning(message);
-  if (!hasAnswer(message) && !reasoning && !contextWasDropped) return null;
+  if (!hasAnswer(message) && !reasoning && !contextWasDropped && !incomplete) {
+    return null;
+  }
   return (
     <AssistantBubble>
       {contextWasDropped && <ContextNote />}
       {reasoning && <ReasoningBlock message={message} />}
+      {incomplete && <IncompleteResponseNote />}
       {hasAnswer(message) && <Markdown>{answerText(message)}</Markdown>}
     </AssistantBubble>
   );

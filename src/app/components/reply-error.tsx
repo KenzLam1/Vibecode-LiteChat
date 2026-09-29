@@ -5,6 +5,33 @@ import { TryAgainButton } from "./try-again";
 
 const FALLBACK = "The reply failed. Please try again.";
 
+export function ResponseBudgetRecovery({
+  modelName,
+  onConciseRetry,
+}: {
+  modelName: string;
+  onConciseRetry: () => void;
+}) {
+  return (
+    <AssistantBubble>
+      <div role="alert" className="flex flex-col items-start gap-2">
+        <p className="text-sm text-red-700">
+          {modelName} reached its response limit while reasoning and didn&apos;t
+          produce an answer.
+        </p>
+        <p className="text-sm text-gray-700">
+          Retrying the same request may fail again. Try a concise answer, or
+          split the request into a smaller first step.
+        </p>
+        <TryAgainButton
+          label="Try a concise answer"
+          onClick={onConciseRetry}
+        />
+      </div>
+    </AssistantBubble>
+  );
+}
+
 // The chat route sends a short, user-facing sentence when a stream fails. Any
 // other error (an HTML error page, a JSON body, a browser network error) is
 // replaced by a generic sentence rather than shown raw.
@@ -22,10 +49,24 @@ export function replyErrorMessage(error: Error): string {
 export function ReplyError({
   error,
   onRetry,
+  responseBudgetFailure = false,
+  modelName,
+  onConciseRetry,
 }: {
   error: Error;
   onRetry: () => void;
+  responseBudgetFailure?: boolean;
+  modelName?: string;
+  onConciseRetry?: () => void;
 }) {
+  if (responseBudgetFailure && modelName && onConciseRetry) {
+    return (
+      <ResponseBudgetRecovery
+        modelName={modelName}
+        onConciseRetry={onConciseRetry}
+      />
+    );
+  }
   return (
     <AssistantBubble>
       <div role="alert" className="flex flex-col items-start gap-2">

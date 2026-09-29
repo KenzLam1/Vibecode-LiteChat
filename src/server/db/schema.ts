@@ -91,12 +91,19 @@ export type AttachmentData = {
 };
 export type ContextData = { dropped: true };
 export type ReasoningData = { durationMs: number; finished: true };
+export type CompletionData = { incomplete: true; finishReason: "length" };
+export type ReplyFailureData = {
+  reason: "response-budget";
+  recovery: "concise";
+};
 export type ChatMessage = UIMessage<
   never,
   {
     attachment: AttachmentData;
+    completion: CompletionData;
     context: ContextData;
     reasoning: ReasoningData;
+    replyFailure: ReplyFailureData;
   }
 >;
 

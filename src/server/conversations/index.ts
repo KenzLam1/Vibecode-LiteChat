@@ -9,6 +9,7 @@ import {
 
 import {
   createConversationService,
+  ReplyTerminalError,
   type ConversationService,
 } from "./service";
 import { activeReplyRegistry } from "./active-replies";
@@ -33,6 +34,10 @@ export function conversationService(): ConversationService {
       maxOutputTokens: REPLY_MAX_OUTPUT_TOKENS,
     }),
     onReplyError: (error, model) => {
+      if (error instanceof ReplyTerminalError) {
+        console.error("[chat] abnormal reply terminal:", error.details);
+        return;
+      }
       const requestId = proxyRequestId(error);
       console.error(
         `[chat] ${model.id} reply failed${requestId ? ` (x-request-id ${requestId})` : ""}:`,

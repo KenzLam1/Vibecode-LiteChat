@@ -5,9 +5,11 @@
 export function TryAgainButton({
   onClick,
   disabled = false,
+  label = "Try again",
 }: {
   onClick: () => void;
   disabled?: boolean;
+  label?: string;
 }) {
   return (
     <button
@@ -29,7 +31,7 @@ export function TryAgainButton({
         <path d="M3.5 10a6.5 6.5 0 1 0 2-4.7" />
         <path d="M3 3v4h4" />
       </svg>
-      Try again
+      {label}
     </button>
   );
 }
