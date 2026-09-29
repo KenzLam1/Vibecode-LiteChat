@@ -1,0 +1,1 @@
+export const SYSTEM_PROMPT_MAX_CHARS = 4_000;

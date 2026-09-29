@@ -8,7 +8,22 @@ See spec: User Stories 22–25; `CONTEXT.md` → Reasoning; Implementation Decis
 
 **Status:** ready-for-agent
 
-- [ ] Reasoning streams live into the block and it collapses when the answer starts
-- [ ] The block shows how long the model thought and can be expanded after a refresh
-- [ ] Seam-1 test: the context passed to the mock model on the next turn contains no reasoning parts
-- [ ] A route without reasoning parts shows the timer only, with no empty block
+- [x] Reasoning streams live into the block and it collapses when the answer starts
+- [x] The block shows how long the model thought and can be expanded after a refresh
+- [x] Seam-1 test: the context passed to the mock model on the next turn contains no reasoning parts
+- [x] A route without reasoning parts shows the timer only, with no empty block
+
+## Comments
+
+**2026-09-29 — implemented.** Findings:
+
+- Reasoning duration is measured from the reply request until the first
+  nonblank answer token. A small `data-reasoning` part persists that duration
+  beside the SDK's reasoning part, without a database migration.
+- In a live Claude run the open block streamed reasoning, then collapsed to
+  `Thought for 1.5s` when the answer appeared. Persisted Claude and Gemini
+  blocks retained their durations and expanded after a refresh.
+- ChatGPT still exposes no reasoning text through the SDK. It showed the
+  existing timer while waiting and no empty block after the answer.
+- The context builder continues to convert only answer text and attachment
+  text, so neither reasoning nor its timing marker is sent on later turns.

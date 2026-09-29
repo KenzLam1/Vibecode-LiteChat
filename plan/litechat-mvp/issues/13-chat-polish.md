@@ -11,7 +11,7 @@ See spec: User Story 66; Further Notes → nice-to-haves.
 - [x] Auto-scroll follows a streaming reply
 - [x] Scrolling up during a stream stops auto-scroll and shows the scroll-to-bottom button
 - [x] The button jumps to the latest message and auto-scroll resumes
-- [ ] Attachment rejections and failed rename or delete show as toasts that disappear on their own
+- [x] Attachment rejections and failed rename or delete show as toasts that disappear on their own
 - [x] Toasts never block typing or clicking
 
 ## Comments
@@ -32,3 +32,7 @@ See spec: User Story 66; Further Notes → nice-to-haves.
 - The combined attachment/rename/delete box stays unticked only because Lane B
   owns attachment handling and has not wired its rejection path yet. Rename and
   delete failures are complete in this lane.
+
+**2026-09-29 — Lane B integration complete.** Client-side attachment type and
+count rejections now use the shared toast API. Server-side extraction failures,
+including scanned PDFs, surface through the same toast path from `useChat`.

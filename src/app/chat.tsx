@@ -1,7 +1,7 @@
 "use client";
 
 import { useChat } from "@ai-sdk/react";
-import { DefaultChatTransport } from "ai";
+import { DefaultChatTransport, type FileUIPart } from "ai";
 import { useRouter } from "next/navigation";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
@@ -13,9 +13,11 @@ import {
   AssistantBubble,
   MessageBubble,
   hasAnswer,
+  hasReasoning,
 } from "./components/message-bubble";
 import { ReplyError } from "./components/reply-error";
 import { ThinkingTimer } from "./components/thinking-timer";
+import { useToast } from "./components/toast";
 import { TryAgainButton } from "./components/try-again";
 
 // The server keeps the history, so a request carries only what's new: the
@@ -29,20 +31,49 @@ const transport = new DefaultChatTransport<ChatMessage>({
     const text = (messages.at(-1)?.parts ?? [])
       .flatMap((part) => (part.type === "text" ? [part.text] : []))
       .join("");
-    return { body: { trigger, conversationId: id, text } };
+    const attachments = (messages.at(-1)?.parts ?? []).flatMap((part) =>
+      part.type === "file"
+        ? [
+            {
+              filename: part.filename ?? "document",
+              mediaType: part.mediaType,
+              url: part.url,
+            },
+          ]
+        : [],
+    );
+    return { body: { trigger, conversationId: id, text, attachments } };
   },
 });
+
+function filePart(file: File): Promise<FileUIPart> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () =>
+      resolve({
+        type: "file",
+        filename: file.name,
+        mediaType: file.type || "application/octet-stream",
+        url: String(reader.result),
+      });
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
 
 export function Chat({
   conversationId,
   model,
   initialMessages,
+  initialReplyInProgress,
 }: {
   conversationId: string;
   model: CatalogModel;
   initialMessages: ChatMessage[];
+  initialReplyInProgress: boolean;
 }) {
   const router = useRouter();
+  const toast = useToast();
   const { messages, sendMessage, regenerate, status, error } =
     useChat<ChatMessage>({
       id: conversationId,
@@ -62,6 +93,9 @@ export function Chat({
     }
     previousStatus.current = status;
   }, [router, status]);
+  useEffect(() => {
+    if (error) toast(error.message);
+  }, [error, toast]);
   useLayoutEffect(() => {
     if (!followLatest.current || !messageList.current) return;
     messageList.current.scrollTo({ top: messageList.current.scrollHeight });
@@ -71,9 +105,25 @@ export function Chat({
   // The timer runs from the request until the first answer token; reasoning
   // arriving first doesn't stop it.
   const thinking =
-    busy && !(lastMessage?.role === "assistant" && hasAnswer(lastMessage));
+    busy &&
+    !(
+      lastMessage?.role === "assistant" &&
+      (hasAnswer(lastMessage) || hasReasoning(lastMessage))
+    );
   // A reopened conversation whose last message never got an answer.
-  const unanswered = status === "ready" && lastMessage?.role === "user";
+  const unanswered =
+    status === "ready" &&
+    lastMessage?.role === "user" &&
+    !initialReplyInProgress;
+
+  async function stopReply() {
+    const response = await fetch("/api/chat/stop", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ conversationId }),
+    });
+    if (!response.ok) toast(await response.text());
+  }
 
   return (
     <div className="flex h-dvh w-full flex-col">
@@ -110,6 +160,11 @@ export function Chat({
                 <TryAgainButton onClick={() => void regenerate()} />
               </div>
             )}
+            {initialReplyInProgress && status === "ready" && (
+              <p className="text-sm text-gray-500" role="status">
+                The reply is still finishing. Refresh in a moment.
+              </p>
+            )}
             {error && !busy && (
               <ReplyError error={error} onRetry={() => void regenerate()} />
             )}
@@ -139,7 +194,13 @@ export function Chat({
         <Composer
           model={model}
           busy={busy}
-          onSend={(text) => void sendMessage({ text })}
+          onStop={() => void stopReply()}
+          onSend={async (text, files) => {
+            await sendMessage({
+              text,
+              files: await Promise.all(files.map(filePart)),
+            });
+          }}
         />
       </footer>
     </div>

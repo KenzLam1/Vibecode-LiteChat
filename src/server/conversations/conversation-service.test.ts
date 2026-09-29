@@ -9,6 +9,7 @@ import { conversations, messages, users } from "@/server/db/schema";
 import {
   ConversationError,
   createConversationService,
+  type AttachmentInput,
   type ConversationService,
 } from "./service";
 
@@ -137,6 +138,18 @@ function textOf(message: { parts: { type: string; text?: string }[] }) {
     .join("");
 }
 
+function attachment(
+  filename: string,
+  contents: string,
+  mediaType = "text/plain",
+): AttachmentInput {
+  return {
+    filename,
+    mediaType,
+    data: new TextEncoder().encode(contents),
+  };
+}
+
 let db: Db;
 let alice: CurrentUser;
 let bob: CurrentUser;
@@ -153,13 +166,17 @@ function addUser(username: string): CurrentUser {
 }
 
 // Every service call sees a clock that has moved on by one second.
-function useModel(next: MockLanguageModelV3) {
+function useModel(
+  next: MockLanguageModelV3,
+  options: { contextTokenBudget?: number } = {},
+) {
   model = next;
   service = createConversationService({
     db,
     modelFor: () => ({ model }),
     now: () => new Date((clock += 1000)),
     replyIdleTimeoutMs: 50,
+    ...options,
   });
 }
 
@@ -229,6 +246,187 @@ describe("delete", () => {
 });
 
 describe("send", () => {
+  it("truncates attachment text over 50,000 characters before saving it", async () => {
+    useModel(scriptedModel({ reply: "Done" }));
+    const { id } = await service.start(alice, "claude");
+
+    const reply = await service.send(alice, id, {
+      text: "Summarise this",
+      attachments: [attachment("notes.txt", "a".repeat(50_001))],
+    });
+    await drain(reply.stream);
+    await reply.done;
+
+    const { messages } = (await service.open(alice, id))!;
+    expect(messages[0].parts).toContainEqual({
+      type: "data-attachment",
+      data: {
+        filename: "notes.txt",
+        size: 50_001,
+        text: "a".repeat(50_000),
+        truncated: true,
+      },
+    });
+  });
+
+  it("rejects a disallowed attachment before saving the user message", async () => {
+    useModel(scriptedModel({ reply: "Should not run" }));
+    const { id } = await service.start(alice, "claude");
+
+    await expect(
+      service.send(alice, id, {
+        text: "Describe this",
+        attachments: [attachment("photo.png", "not really an image", "image/png")],
+      }),
+    ).rejects.toMatchObject({
+      reason: "rejected",
+      message: "photo.png isn't a supported document type.",
+    });
+
+    expect(model.doStreamCalls).toHaveLength(0);
+    expect((await service.open(alice, id))!.messages).toEqual([]);
+  });
+
+  it("rejects more than five attachments before saving the user message", async () => {
+    useModel(scriptedModel({ reply: "Should not run" }));
+    const { id } = await service.start(alice, "claude");
+
+    await expect(
+      service.send(alice, id, {
+        text: "Compare these",
+        attachments: Array.from({ length: 6 }, (_, index) =>
+          attachment(`note-${index}.txt`, `Note ${index}`),
+        ),
+      }),
+    ).rejects.toMatchObject({
+      reason: "rejected",
+      message: "You can attach up to 5 documents per message.",
+    });
+
+    expect(model.doStreamCalls).toHaveLength(0);
+    expect((await service.open(alice, id))!.messages).toEqual([]);
+  });
+
+  it("rejects a PDF with no extractable text before saving", async () => {
+    useModel(scriptedModel({ reply: "Should not run" }));
+    const { id } = await service.start(alice, "claude");
+    const blankPdf = [
+      "%PDF-1.4",
+      "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj",
+      "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj",
+      "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >> endobj",
+      "trailer << /Root 1 0 R >>",
+      "%%EOF",
+    ].join("\n");
+
+    await expect(
+      service.send(alice, id, {
+        text: "Read this",
+        attachments: [attachment("scan.pdf", blankPdf, "application/pdf")],
+      }),
+    ).rejects.toMatchObject({
+      reason: "rejected",
+      message: "No text found in scan.pdf. Scanned PDFs aren't supported.",
+    });
+
+    expect(model.doStreamCalls).toHaveLength(0);
+    expect((await service.open(alice, id))!.messages).toEqual([]);
+  });
+
+  it("sends attachment text with a filename label now and on later turns", async () => {
+    useModel(scriptedModel({ reply: "First answer" }, { reply: "Second answer" }));
+    const { id } = await service.start(alice, "claude");
+
+    const first = await service.send(alice, id, {
+      text: "What does this say?",
+      attachments: [attachment("brief.md", "Project North Star")],
+    });
+    await drain(first.stream);
+    await first.done;
+    const second = await service.send(alice, id, { text: "What was its name?" });
+    await drain(second.stream);
+    await second.done;
+
+    const attachmentPart = {
+      type: "text",
+      text: "[Attached file: brief.md]\nProject North Star",
+    };
+    expect(model.doStreamCalls[0].prompt).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "What does this say?" },
+          attachmentPart,
+        ],
+      },
+    ]);
+    expect(model.doStreamCalls[1].prompt).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "What does this say?" },
+          attachmentPart,
+        ],
+      },
+      { role: "assistant", content: [{ type: "text", text: "First answer" }] },
+      { role: "user", content: [{ type: "text", text: "What was its name?" }] },
+    ]);
+  });
+
+  it("keeps only the newest turns that fit and reports dropped context", async () => {
+    useModel(
+      scriptedModel(
+        { reply: "old answer" },
+        { reply: "recent answer" },
+        { reply: "new answer" },
+      ),
+      { contextTokenBudget: 12 },
+    );
+    const { id } = await service.start(alice, "claude");
+    for (const text of ["old question", "recent question"]) {
+      const reply = await service.send(alice, id, { text });
+      await drain(reply.stream);
+      await reply.done;
+    }
+
+    const reply = await service.send(alice, id, { text: "newest question" });
+    await drain(reply.stream);
+    await reply.done;
+
+    expect(reply.droppedContext).toBe(true);
+    expect(model.doStreamCalls[2].prompt).toEqual([
+      { role: "user", content: [{ type: "text", text: "recent question" }] },
+      { role: "assistant", content: [{ type: "text", text: "recent answer" }] },
+      { role: "user", content: [{ type: "text", text: "newest question" }] },
+    ]);
+    const opened = await service.open(alice, id);
+    expect(opened?.messages.at(-1)?.parts).toContainEqual({
+      type: "data-context",
+      data: { dropped: true },
+    });
+  });
+
+  it("rejects an over-budget newest message before saving or calling the model", async () => {
+    useModel(scriptedModel({ reply: "Should not run" }), {
+      contextTokenBudget: 3,
+    });
+    const { id } = await service.start(alice, "claude");
+
+    await expect(
+      service.send(alice, id, {
+        text: "Read this",
+        attachments: [attachment("large.txt", "far too much attachment text")],
+      }),
+    ).rejects.toMatchObject({
+      reason: "rejected",
+      message:
+        "These attachments are too large to send together. Try fewer files.",
+    });
+
+    expect(model.doStreamCalls).toHaveLength(0);
+    expect((await service.open(alice, id))!.messages).toEqual([]);
+  });
+
   it("saves the user message and the finished reply", async () => {
     useModel(scriptedModel({ reply: "Hello there!" }));
     const { id } = await service.start(alice, "claude");
@@ -268,6 +466,13 @@ describe("send", () => {
     expect(messages[1].parts).toContainEqual(
       expect.objectContaining({ type: "reasoning", text: "They said hi." }),
     );
+    expect(messages[1].parts).toContainEqual({
+      type: "data-reasoning",
+      data: {
+        durationMs: expect.any(Number),
+        finished: true,
+      },
+    });
   });
 
   it("keeps the user message but saves nothing when the reply fails before the first token", async () => {
@@ -361,6 +566,27 @@ describe("send", () => {
     ]);
   });
 
+  it("uses the user's current system prompt on the next turn", async () => {
+    useModel(scriptedModel({ reply: "First answer" }, { reply: "Bonjour" }));
+    const { id } = await service.start(alice, "claude");
+    const first = await service.send(alice, id, { text: "First question" });
+    await drain(first.stream);
+    await first.done;
+
+    db.update(users)
+      .set({ systemPrompt: "Always answer in French" })
+      .where(eq(users.id, alice.id))
+      .run();
+    const second = await service.send(alice, id, { text: "Second question" });
+    await drain(second.stream);
+    await second.done;
+
+    expect(model.doStreamCalls[1].prompt[0]).toEqual({
+      role: "system",
+      content: "Always answer in French",
+    });
+  });
+
   it("bumps the conversation's updated_at for every saved message", async () => {
     useModel(scriptedModel({ reply: "Hello!" }, { failBeforeFirstToken: true }));
     const { id, updatedAt: created } = await service.start(alice, "claude");
@@ -423,6 +649,59 @@ describe("regenerate", () => {
       reason: "rejected",
     });
     expect(model.doStreamCalls).toHaveLength(1);
+  });
+});
+
+describe("stop", () => {
+  it("saves the partial answer and allows the next message", async () => {
+    useModel(
+      scriptedModel({ stallAfter: "Partial answer" }, { reply: "Next answer" }),
+    );
+    const { id } = await service.start(alice, "claude");
+
+    const first = await service.send(alice, id, { text: "First question" });
+    const browserDrain = drain(first.stream);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await service.stop(alice, id);
+    await browserDrain;
+    await first.done;
+
+    const afterStop = await service.open(alice, id);
+    expect(afterStop?.messages.map((message) => [message.role, textOf(message)])).toEqual([
+      ["user", "First question"],
+      ["assistant", "Partial answer"],
+    ]);
+
+    const second = await service.send(alice, id, { text: "Second question" });
+    await drain(second.stream);
+    await second.done;
+    expect((await service.open(alice, id))?.messages.map(textOf)).toEqual([
+      "First question",
+      "Partial answer",
+      "Second question",
+      "Next answer",
+    ]);
+  });
+
+  it("does not start a second reply after reopening mid-stream", async () => {
+    useModel(scriptedModel({ stallAfter: "Still working" }, { reply: "Duplicate" }));
+    const { id } = await service.start(alice, "claude");
+
+    const first = await service.send(alice, id, { text: "Question" });
+    const browserDrain = drain(first.stream);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    expect((await service.open(alice, id))?.replyInProgress).toBe(true);
+    await expect(service.regenerate(alice, id)).rejects.toMatchObject({
+      reason: "rejected",
+      message: "A reply is already in progress for this conversation.",
+    });
+    expect(model.doStreamCalls).toHaveLength(1);
+
+    await service.stop(alice, id);
+    await browserDrain;
+    await first.done;
+    expect((await service.open(alice, id))?.replyInProgress).toBe(false);
   });
 });
 

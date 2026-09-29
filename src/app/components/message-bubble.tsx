@@ -1,7 +1,7 @@
 "use client";
 
 import type { UIMessage } from "ai";
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { Markdown } from "./markdown";
 
@@ -33,16 +33,124 @@ export function hasAnswer(message: UIMessage): boolean {
   return answerText(message).trim().length > 0;
 }
 
+function reasoningText(message: UIMessage): string {
+  return message.parts
+    .flatMap((part) => (part.type === "reasoning" ? [part.text] : []))
+    .join("\n\n");
+}
+
+export function hasReasoning(message: UIMessage): boolean {
+  return reasoningText(message).trim().length > 0;
+}
+
+function reasoningDuration(message: UIMessage): number | undefined {
+  const part = message.parts.find((candidate) => candidate.type === "data-reasoning");
+  if (!part || !("data" in part)) return undefined;
+  return (part.data as { durationMs?: number }).durationMs;
+}
+
+function attachments(message: UIMessage) {
+  return message.parts.flatMap((part) => {
+    if (part.type === "file") {
+      return [{ filename: part.filename ?? "document", truncated: false }];
+    }
+    if (part.type === "data-attachment") {
+      const data = part.data as { filename: string; truncated: boolean };
+      return [{ filename: data.filename, truncated: data.truncated }];
+    }
+    return [];
+  });
+}
+
+function droppedContext(message: UIMessage): boolean {
+  return message.parts.some(
+    (part) =>
+      part.type === "data-context" &&
+      (part.data as { dropped?: boolean }).dropped === true,
+  );
+}
+
+function ContextNote() {
+  return (
+    <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
+      Older messages are no longer included in the model&apos;s context.
+    </p>
+  );
+}
+
+function ReasoningBlock({ message }: { message: UIMessage }) {
+  const durationMs = reasoningDuration(message);
+  const finished = hasAnswer(message) || durationMs !== undefined;
+  const [liveElapsedMs, setLiveElapsedMs] = useState(0);
+
+  useEffect(() => {
+    if (finished) return;
+    const startedAt = performance.now();
+    const interval = setInterval(
+      () => setLiveElapsedMs(performance.now() - startedAt),
+      100,
+    );
+    return () => clearInterval(interval);
+  }, [finished]);
+
+  const label = finished
+    ? durationMs === undefined
+      ? "Thought"
+      : `Thought for ${(durationMs / 1000).toFixed(1)}s`
+    : `Thinking… (${(liveElapsedMs / 1000).toFixed(1)}s)`;
+
+  return (
+    <details open={!finished} className="mb-3 rounded-lg bg-gray-50 px-3 py-2">
+      <summary className="cursor-pointer text-sm font-medium text-gray-600">
+        {label}
+      </summary>
+      <p className="mt-2 whitespace-pre-wrap text-sm text-gray-600">
+        {reasoningText(message)}
+      </p>
+    </details>
+  );
+}
+
 // User text is shown as typed; replies are rendered as markdown. A reply with
 // no answer text yet renders nothing: the thinking timer stands in for it.
 export function MessageBubble({ message }: { message: UIMessage }) {
   if (message.role === "user") {
-    return <UserBubble>{answerText(message)}</UserBubble>;
+    const documents = attachments(message);
+    return (
+      <UserBubble>
+        <div className="flex flex-col gap-2">
+          {documents.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {documents.map((document, index) => (
+                <span
+                  key={`${document.filename}-${index}`}
+                  className="rounded-full bg-white/20 px-2.5 py-1 text-xs font-medium"
+                >
+                  {document.filename}
+                </span>
+              ))}
+            </div>
+          )}
+          {answerText(message) && <span>{answerText(message)}</span>}
+          {documents
+            .filter((document) => document.truncated)
+            .map((document, index) => (
+              <span key={`${document.filename}-truncated-${index}`} className="text-xs text-white/80">
+                {document.filename} was truncated to its first 50,000 characters.
+              </span>
+            ))}
+        </div>
+      </UserBubble>
+    );
   }
-  if (!hasAnswer(message)) return null;
+  const contextWasDropped = droppedContext(message);
+  const reasoning = hasReasoning(message);
+  if (!hasAnswer(message) && !reasoning && !contextWasDropped) return null;
   return (
     <AssistantBubble>
-      <Markdown>{answerText(message)}</Markdown>
+      {contextWasDropped && <ContextNote />}
+      {reasoning && <ReasoningBlock message={message} />}
+      {hasAnswer(message) && <Markdown>{answerText(message)}</Markdown>}
     </AssistantBubble>
   );
 }

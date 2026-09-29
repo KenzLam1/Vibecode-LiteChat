@@ -11,11 +11,24 @@ import type { Db } from "@/server/db";
 import {
   conversations,
   messages,
+  users,
   type ChatMessage,
 } from "@/server/db/schema";
 
-import { buildContext } from "./context";
+import {
+  buildContext,
+  CONTEXT_TOKEN_BUDGET,
+  ContextBudgetError,
+  type BuiltContext,
+} from "./context";
+import {
+  AttachmentError,
+  extractAttachments,
+  type AttachmentInput,
+} from "./attachments";
 import { applyAutomaticTitle, applyFallbackTitle } from "./titles";
+
+export type { AttachmentInput } from "./attachments";
 
 // The Conversation service: the one place that reads and writes
 // conversations. Every operation takes the current user and only ever sees
@@ -26,6 +39,7 @@ export type Conversation = typeof conversations.$inferSelect;
 export type OpenConversation = {
   conversation: Conversation;
   messages: ChatMessage[];
+  replyInProgress: boolean;
 };
 
 export type ChatMessageChunk = InferUIMessageChunk<ChatMessage>;
@@ -36,6 +50,7 @@ export type ChatMessageChunk = InferUIMessageChunk<ChatMessage>;
 export type Reply = {
   stream: ReadableStream<ChatMessageChunk>;
   done: Promise<void>;
+  droppedContext: boolean;
 };
 
 export class ConversationError extends Error {
@@ -69,7 +84,14 @@ export type ConversationServiceDeps = {
   // How long a reply may go without sending anything before it counts as
   // failed. Injected so tests don't wait.
   replyIdleTimeoutMs?: number;
+  contextTokenBudget?: number;
+  activeReplies?: ActiveReplyRegistry;
 };
+
+export type ActiveReplyRegistry = Map<
+  string,
+  { controller: AbortController; done: Promise<void> }
+>;
 
 export type ConversationService = ReturnType<typeof createConversationService>;
 
@@ -86,6 +108,8 @@ export function createConversationService({
   now = () => new Date(),
   onReplyError,
   replyIdleTimeoutMs = REPLY_IDLE_TIMEOUT_MS,
+  contextTokenBudget = CONTEXT_TOKEN_BUDGET,
+  activeReplies = new Map(),
 }: ConversationServiceDeps) {
   function findOwned(user: CurrentUser, id: string): Conversation | undefined {
     return db
@@ -103,6 +127,16 @@ export function createConversationService({
     return conversation;
   }
 
+  function currentSystemPrompt(user: CurrentUser): string | null {
+    return (
+      db
+        .select({ systemPrompt: users.systemPrompt })
+        .from(users)
+        .where(eq(users.id, user.id))
+        .get()?.systemPrompt ?? null
+    );
+  }
+
   // Retired models are derived from the catalog, never stored.
   function requireLiveModel(conversation: Conversation): CatalogModel {
     const model = findModel(conversation.modelId);
@@ -113,6 +147,15 @@ export function createConversationService({
       );
     }
     return model;
+  }
+
+  function requireNoActiveReply(conversationId: string) {
+    if (activeReplies.has(conversationId)) {
+      throw new ConversationError(
+        "rejected",
+        "A reply is already in progress for this conversation.",
+      );
+    }
   }
 
   function history(conversationId: string): ChatMessage[] {
@@ -184,14 +227,20 @@ export function createConversationService({
   }
 
   async function streamReply(
+    user: CurrentUser,
     conversation: Conversation,
     model: CatalogModel,
+    preparedContext?: BuiltContext,
   ): Promise<Reply> {
     const failedText = `${model.displayName} didn't answer. Please try again.`;
+    const reasoningStartedAt = performance.now();
+    let sawReasoning = false;
+    let reasoningFinished = false;
 
     // Aborts the model call when nothing has arrived for a while, before the
     // first token or between tokens.
     const idle = new AbortController();
+    const stopped = new AbortController();
     let idleTimer: ReturnType<typeof setTimeout> | undefined;
     const resetIdleTimer = () => {
       clearTimeout(idleTimer);
@@ -207,13 +256,19 @@ export function createConversationService({
       );
     };
 
-    const context = await buildContext(history(conversation.id));
+    const context =
+      preparedContext ??
+      (await buildContext(history(conversation.id), {
+        tokenBudget: contextTokenBudget,
+        systemPrompt: currentSystemPrompt(user),
+      }));
     const modelSettings = modelFor(model);
     resetIdleTimer();
     const result = streamText({
       ...modelSettings,
-      messages: context,
-      abortSignal: idle.signal,
+      messages: context.messages,
+      system: context.systemPrompt,
+      abortSignal: AbortSignal.any([idle.signal, stopped.signal]),
       onChunk: resetIdleTimer,
       // Failures are reported once, through the UI stream below.
       onError: () => {},
@@ -232,6 +287,40 @@ export function createConversationService({
       .pipeThrough(
         new TransformStream<ChatMessageChunk, ChatMessageChunk>({
           transform(chunk, controller) {
+            if (chunk.type === "start" && context.dropped) {
+              controller.enqueue(chunk);
+              controller.enqueue({
+                type: "data-context",
+                data: { dropped: true },
+              });
+              return;
+            }
+            if (
+              chunk.type === "reasoning-delta" &&
+              /\S/.test(chunk.delta)
+            ) {
+              sawReasoning = true;
+            }
+            const answerStarted =
+              chunk.type === "text-delta" && /\S/.test(chunk.delta);
+            const replyEnded =
+              chunk.type === "finish" ||
+              chunk.type === "abort" ||
+              chunk.type === "error";
+            if (
+              sawReasoning &&
+              !reasoningFinished &&
+              (answerStarted || replyEnded)
+            ) {
+              reasoningFinished = true;
+              controller.enqueue({
+                type: "data-reasoning",
+                data: {
+                  durationMs: Math.round(performance.now() - reasoningStartedAt),
+                  finished: true,
+                },
+              });
+            }
             if (chunk.type === "abort" && idle.signal.aborted) {
               onReplyError?.(idle.signal.reason, model);
               controller.enqueue({ type: "error", errorText: failedText });
@@ -244,9 +333,26 @@ export function createConversationService({
       )
       .tee();
 
+    const active = {
+      controller: stopped,
+      done: Promise.resolve(),
+    };
+    activeReplies.set(conversation.id, active);
+    const done = saveWhenFinished(
+      conversation.id,
+      modelSettings,
+      toServer,
+    ).finally(() => {
+      if (activeReplies.get(conversation.id) === active) {
+        activeReplies.delete(conversation.id);
+      }
+    });
+    active.done = done;
+
     return {
       stream: toBrowser,
-      done: saveWhenFinished(conversation.id, modelSettings, toServer),
+      done,
+      droppedContext: context.dropped,
     };
   }
 
@@ -281,7 +387,11 @@ export function createConversationService({
     async open(user: CurrentUser, id: string): Promise<OpenConversation | null> {
       const conversation = findOwned(user, id);
       if (!conversation) return null;
-      return { conversation, messages: history(conversation.id) };
+      return {
+        conversation,
+        messages: history(conversation.id),
+        replyInProgress: activeReplies.has(conversation.id),
+      };
     },
 
     async rename(
@@ -318,26 +428,60 @@ export function createConversationService({
     async send(
       user: CurrentUser,
       id: string,
-      input: { text: string },
+      input: { text: string; attachments?: AttachmentInput[] },
     ): Promise<Reply> {
       const conversation = requireOwned(user, id);
       const model = requireLiveModel(conversation);
+      requireNoActiveReply(conversation.id);
       const text = input.text.trim();
-      if (!text) {
+      if (!text && !input.attachments?.length) {
         throw new ConversationError("rejected", "Type a message to send.");
       }
-      saveMessage(conversation.id, {
+      let attachments;
+      try {
+        attachments = await extractAttachments(input.attachments ?? []);
+      } catch (error) {
+        if (error instanceof AttachmentError) {
+          throw new ConversationError("rejected", error.message);
+        }
+        throw error;
+      }
+      const userMessage = {
+        id: crypto.randomUUID(),
         role: "user",
-        parts: [{ type: "text", text }],
-      });
-      applyFallbackTitle(db, conversation.id, text);
-      return streamReply(conversation, model);
+        parts: [
+          ...(text ? [{ type: "text" as const, text }] : []),
+          ...attachments.map((data) => ({
+            type: "data-attachment" as const,
+            data,
+          })),
+        ],
+      } satisfies ChatMessage;
+      let context;
+      try {
+        context = await buildContext(
+          [...history(conversation.id), userMessage],
+          {
+            tokenBudget: contextTokenBudget,
+            systemPrompt: currentSystemPrompt(user),
+          },
+        );
+      } catch (error) {
+        if (error instanceof ContextBudgetError) {
+          throw new ConversationError("rejected", error.message);
+        }
+        throw error;
+      }
+      saveMessage(conversation.id, userMessage);
+      if (text) applyFallbackTitle(db, conversation.id, text);
+      return streamReply(user, conversation, model, context);
     },
 
     // Streams a new reply to the saved, unanswered last user message.
     async regenerate(user: CurrentUser, id: string): Promise<Reply> {
       const conversation = requireOwned(user, id);
       const model = requireLiveModel(conversation);
+      requireNoActiveReply(conversation.id);
       const last = history(conversation.id).at(-1);
       if (last?.role !== "user") {
         throw new ConversationError(
@@ -345,7 +489,17 @@ export function createConversationService({
           "There is no unanswered message to try again.",
         );
       }
-      return streamReply(conversation, model);
+      return streamReply(user, conversation, model);
+    },
+
+    async stop(user: CurrentUser, id: string): Promise<void> {
+      const conversation = requireOwned(user, id);
+      const active = activeReplies.get(conversation.id);
+      if (!active) {
+        throw new ConversationError("rejected", "There is no reply to stop.");
+      }
+      active.controller.abort(new DOMException("Reply stopped", "AbortError"));
+      await active.done;
     },
   };
 }
