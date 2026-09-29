@@ -1,5 +1,8 @@
 # LiteChat study
 
+> This directory is historical product research. For the current app's
+> features, setup, and development commands, see the [project README](../README.md).
+
 A study of **litechat.ai** made on 2026-09-29. It covers the public landing page, the logged-in chat app (as a Personal account), the Profile page, and the SimGen sister app.
 
 ## How this was gathered
