@@ -8,7 +8,14 @@ Issues and specs (you may know a spec as a PRD) for this repo live as markdown f
 - The spec is `plan/<feature-slug>/spec.md`
 - Implementation issues are one file per ticket at `plan/<feature-slug>/issues/<NN>-<slug>.md`, numbered from `01` — never a single combined tickets file
 - Triage state is recorded as a `Status:` line near the top of each spec and issue file (see `triage-labels.md` for the role strings)
+- Once an issue is complete and verified, replace its triage state with the
+  terminal `Status: implemented`; completed specs use the same state when all
+  of their issues are implemented
 - Comments and conversation history append to the bottom of the file under a `## Comments` heading
+
+An agent looking for work should only pick up an issue with `Status:
+ready-for-agent` and unchecked acceptance criteria. Files marked `implemented`
+are retained as decision and implementation history.
 
 ## When a skill says "publish to the issue tracker"
 

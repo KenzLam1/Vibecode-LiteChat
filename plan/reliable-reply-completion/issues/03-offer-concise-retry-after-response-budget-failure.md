@@ -9,7 +9,7 @@ suggest that the user split a large request into a smaller first step.
 
 **Blocked by:** 01 — Reject answerless model completions.
 
-**Status:** ready-for-agent
+**Status:** implemented
 
 - [x] The response-budget failure names the selected model and states that it
       reached its response limit while reasoning without producing an answer.

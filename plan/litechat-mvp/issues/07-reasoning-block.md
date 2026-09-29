@@ -6,7 +6,7 @@ See spec: User Stories 22–25; `CONTEXT.md` → Reasoning; Implementation Decis
 
 **Blocked by:** 02 — Safe markdown, thinking timer, Try again; 03 — Persisted conversations
 
-**Status:** ready-for-agent
+**Status:** implemented
 
 - [x] Reasoning streams live into the block and it collapses when the answer starts
 - [x] The block shows how long the model thought and can be expanded after a refresh

@@ -6,7 +6,7 @@ See spec: User Stories 48–50; `CONTEXT.md` → Context; Implementation Decisio
 
 **Blocked by:** 08 — Document attachments
 
-**Status:** ready-for-agent
+**Status:** implemented
 
 - [x] Seam-1 test: with a small budget, the mock model receives only the newest turns that fit, and the result reports that turns were dropped
 - [x] Seam-1 test: a newest message over budget is rejected before the model is called, and the user message is not left unanswered in a stuck state

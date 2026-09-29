@@ -115,44 +115,31 @@ deletion model.
 - Bottom-sheet dialogs on mobile.
 - Dark mode.
 
-## Current unfinished work
+## Current state
 
-An uncommitted feature is in progress to offer **Try a concise answer** when a
-model spends its response budget reasoning without producing an answer. It is
-intended to retry once with temporary instructions for a short, direct answer,
-without duplicating or changing the user's saved message.
-
-At the time of this review:
-
-- All 83 automated tests pass.
-- Lint reports no errors.
-- Type checking fails because the new code uses `data-reply-failure` in several
-  places while the typed AI SDK data-part name is `data-replyFailure`.
-- The concise-retry issue's acceptance checklist is still open.
-
-The committed MVP is complete, but the present uncommitted worktree should not
-be treated as release-ready until this feature is finished and all checks pass.
+The committed MVP and reliable-reply-completion work are complete. This
+includes the **Try a concise answer** recovery path for models that spend their
+response budget reasoning without producing an answer. The acceptance records
+under `plan/` are marked `implemented`, and all 83 automated tests, lint, and
+type checking pass.
 
 ## Recommended next steps
 
-1. **Finish concise retry and restore a green build.** Correct the data-part
-   naming mismatch, finish the persistence and recovery behaviour, update its
-   tests, and run test, typecheck, lint, and production build checks.
-2. **Add manual memories.** Implement typed memory items and a per-conversation
+1. **Add manual memories.** Implement typed memory items and a per-conversation
    Include Memories toggle. This is the most distinctive missing LiteChat
    feature that does not require an external service.
-3. **Improve the mobile experience.** Replace the fixed desktop sidebar layout
+2. **Improve the mobile experience.** Replace the fixed desktop sidebar layout
    with separate sidebar and chat screens on narrow viewports, and turn dialogs
    into bottom sheets.
-4. **Complete document input support.** Add safe server-side extraction for
+3. **Complete document input support.** Add safe server-side extraction for
    DOCX, XLSX, and PPTX while keeping the existing attachment limits and
    extracted-text persistence model.
-5. **Expose usage information.** Persist token usage and show it per response;
+4. **Expose usage information.** Persist token usage and show it per response;
    add cost estimates only after reliable pricing data is available.
-6. **Add custom web search if a search key is available.** Start with one
+5. **Add custom web search if a search key is available.** Start with one
    bounded search tool and a Sources list, then add multi-turn tools only after
    the single-call path is reliable.
-7. **Prepare for deployment.** Restrict registration, add authentication rate
+6. **Prepare for deployment.** Restrict registration, add authentication rate
    limits, choose durable hosted storage, introduce backups, and review the
    application's security boundaries.
 

@@ -6,7 +6,7 @@ See spec: User Stories 13–16, 60–61; Implementation Decisions → Model cata
 
 **Blocked by:** 04 — Conversation sidebar
 
-**Status:** ready-for-agent
+**Status:** implemented
 
 - [x] ＋ opens the dialog; picking a card creates and opens a conversation with that model
 - [x] The model pill shows the conversation's model and can't be changed

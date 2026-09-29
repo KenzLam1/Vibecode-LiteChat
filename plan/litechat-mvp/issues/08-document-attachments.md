@@ -6,7 +6,7 @@ See spec: User Stories 39–47; `CONTEXT.md` → Attachment; Implementation Deci
 
 **Blocked by:** 03 — Persisted conversations
 
-**Status:** ready-for-agent
+**Status:** implemented
 
 - [x] 📎, drag-and-drop and paste all stage files as removable pills
 - [x] A real PDF gets a correct summary on all three models

@@ -1,6 +1,6 @@
 # LiteChat MVP
 
-Status: ready-for-agent
+Status: implemented
 
 Decided in the grilling session of 2026-09-29. Vocabulary follows `CONTEXT.md`; architecture follows `docs/adr/0001`–`0003`. Evidence for LiteChat's behaviour and the proxy's limits is in `study/`.
 

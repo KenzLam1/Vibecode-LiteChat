@@ -6,7 +6,7 @@ See spec: User Stories 1–12; ADR 0003; Implementation Decisions → Account se
 
 **Blocked by:** 03 — Persisted conversations
 
-**Status:** ready-for-agent
+**Status:** implemented
 
 - [x] Seam-2 tests: duplicate usernames rejected case-insensitively; passwords under 8 characters rejected; wrong password and unknown username return the same error; a valid token resolves to its user; expired and unknown tokens resolve to none; logout invalidates the token; expiry is extended when near its end
 - [x] Only a hash of the login session token is stored

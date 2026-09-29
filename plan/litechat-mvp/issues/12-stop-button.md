@@ -6,7 +6,7 @@ See spec: User Stories 36–37; Implementation Decisions → Persistence rules.
 
 **Blocked by:** 03 — Persisted conversations
 
-**Status:** ready-for-agent
+**Status:** implemented
 
 - [x] Stop appears only while a reply streams and ends it immediately
 - [x] Seam-1 test: a stopped reply saves the partial text shown so far

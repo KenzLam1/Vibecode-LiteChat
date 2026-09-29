@@ -1,6 +1,6 @@
 # Reliable reply completion
 
-Status: ready-for-agent
+Status: implemented
 
 ## Problem Statement
 

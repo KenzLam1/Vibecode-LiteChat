@@ -6,7 +6,7 @@ See spec: User Stories 17, 51, 55, 57–58; Implementation Decisions → hard de
 
 **Blocked by:** 03 — Persisted conversations
 
-**Status:** ready-for-agent
+**Status:** implemented
 
 - [x] The sidebar lists only the current user's conversations, ordered by most recent activity
 - [x] ＋ creates a conversation titled "New conversation" and opens it

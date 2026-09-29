@@ -7,7 +7,7 @@ unchanged.
 
 **Blocked by:** 01 — Reject answerless model completions.
 
-**Status:** ready-for-agent
+**Status:** implemented
 
 - [x] A `length` finish containing nonblank answer text saves the assistant
       message instead of treating it as an answerless failure.

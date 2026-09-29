@@ -6,7 +6,7 @@ See spec: User Story 66; Further Notes → nice-to-haves.
 
 **Blocked by:** 02 — Safe markdown, thinking timer, Try again; 04 — Conversation sidebar
 
-**Status:** ready-for-agent
+**Status:** implemented
 
 - [x] Auto-scroll follows a streaming reply
 - [x] Scrolling up during a stream stops auto-scroll and shows the scroll-to-bottom button

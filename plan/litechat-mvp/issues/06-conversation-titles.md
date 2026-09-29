@@ -6,7 +6,7 @@ See spec: User Stories 52–54, 56; Implementation Decisions → Title rules.
 
 **Blocked by:** 04 — Conversation sidebar
 
-**Status:** ready-for-agent
+**Status:** implemented
 
 - [x] The first message sets the fallback title immediately in the sidebar
 - [x] The AI title replaces the fallback after the first reply (title call uses `maxOutputTokens` ≥ 800)

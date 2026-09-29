@@ -6,7 +6,7 @@ See spec: User Stories 18, 30–35, 59; Implementation Decisions → Conversatio
 
 **Blocked by:** 01 — Walking skeleton
 
-**Status:** ready-for-agent
+**Status:** implemented
 
 - [x] Sending a message in `/c/<id>` and refreshing shows the full history
 - [x] Back and forward between two conversation URLs show the right conversations

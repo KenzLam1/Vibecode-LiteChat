@@ -6,7 +6,7 @@ See spec: User Stories 62–64; `CONTEXT.md` → System prompt.
 
 **Blocked by:** 03 — Persisted conversations
 
-**Status:** ready-for-agent
+**Status:** implemented
 
 - [x] The profile page saves the system prompt, and it survives a refresh
 - [x] More than 4,000 characters can't be saved; the counter shows the limit

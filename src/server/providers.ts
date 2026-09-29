@@ -64,6 +64,18 @@ const routes: Record<ProviderRoute, Route> = {
   },
 };
 
+const modelIdVariables: Record<ProviderRoute, string> = {
+  openai: "OPENAI_MODEL_ID",
+  anthropic: "ANTHROPIC_MODEL_ID",
+  google: "GOOGLE_GENERATIVE_AI_MODEL_ID",
+};
+
+function upstreamModelId(model: CatalogModel): string {
+  return (
+    process.env[modelIdVariables[model.route]]?.trim() || model.upstreamModelId
+  );
+}
+
 // Resolves a catalog model to the settings every call to it needs. Spread
 // the result into `streamText` / `generateText`.
 export function modelCall(model: CatalogModel): {
@@ -72,7 +84,7 @@ export function modelCall(model: CatalogModel): {
 } {
   const route = routes[model.route];
   return {
-    model: route.client(model.upstreamModelId),
+    model: route.client(upstreamModelId(model)),
     providerOptions: route.providerOptions,
   };
 }

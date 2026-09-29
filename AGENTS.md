@@ -63,6 +63,10 @@ Issues and specs live as local markdown files under `plan/<feature-slug>/`. See 
 
 Uses the five default triage labels (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`), recorded as a `Status:` line in each issue file. See `docs/agents/triage-labels.md`.
 
+Completed local issues use `Status: implemented`. This is a terminal lifecycle
+state, not a triage label, and prevents completed plans from being picked up as
+new work.
+
 ### Domain docs
 
 Single-context: one `CONTEXT.md` plus `docs/adr/` at the repo root. See `docs/agents/domain.md`.

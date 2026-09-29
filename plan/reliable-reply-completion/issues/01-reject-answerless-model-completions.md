@@ -9,7 +9,7 @@ failures.
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** implemented
 
 - [x] A natural `length` finish with reasoning but no nonblank answer shows an
       error naming the selected model and explaining that it used its response

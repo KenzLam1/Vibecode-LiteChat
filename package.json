@@ -2,13 +2,19 @@
   "name": "litechat",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=20.9.0",
+    "npm": ">=10"
+  },
+  "packageManager": "npm@10.8.2",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
     "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run",
+    "check": "npm run lint && npm run typecheck && npm test",
     "db:generate": "drizzle-kit generate",
     "smoke": "tsx --conditions=react-server scripts/smoke.ts"
   },

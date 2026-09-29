@@ -6,7 +6,7 @@ See spec: User Stories 19–21, 26–29, 32, 38, 65.
 
 **Blocked by:** 01 — Walking skeleton
 
-**Status:** ready-for-agent
+**Status:** implemented
 
 - [x] Markdown renders headings, lists, links, tables and code; raw HTML in model output is shown as text, not executed
 - [x] Code blocks are syntax-highlighted and Copy puts the exact code on the clipboard

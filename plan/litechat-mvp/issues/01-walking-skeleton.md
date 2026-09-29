@@ -6,7 +6,7 @@ See spec: `plan/litechat-mvp/spec.md` (Modules: Model catalog, Providers, Curren
 
 **Blocked by:** None — can start immediately
 
-**Status:** ready-for-agent
+**Status:** implemented
 
 - [x] `npm run dev` serves a page where typing a message streams a reply from one model
 - [x] Model calls use `maxOutputTokens` ≥ 800 and the AI SDK's default retries
