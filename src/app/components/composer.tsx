@@ -4,24 +4,24 @@ import { useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 
 import type { CatalogModel } from "@/lib/models";
 
+import { useToast } from "./toast";
+
 // The pill row and message box. Enter sends, Shift+Enter adds a new line, and
 // nothing can be sent while a reply is in flight.
 export function Composer({
   model,
   busy,
-  error,
   onSend,
   onStop,
 }: {
   model: CatalogModel;
   busy: boolean;
-  error?: string;
   onSend: (text: string, attachments: File[]) => void | Promise<void>;
   onStop: () => void;
 }) {
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<File[]>([]);
-  const [attachmentError, setAttachmentError] = useState<string>();
+  const toast = useToast();
   const fileInput = useRef<HTMLInputElement>(null);
   const canSend =
     !busy && (input.trim().length > 0 || attachments.length > 0);
@@ -34,16 +34,13 @@ export function Composer({
         !allowed.some((extension) => file.name.toLowerCase().endsWith(extension)),
     );
     if (unsupported) {
-      setAttachmentError(
-        `${unsupported.name} isn't a supported document type.`,
-      );
+      toast(`${unsupported.name} isn't a supported document type.`);
       return;
     }
     if (attachments.length + files.length > 5) {
-      setAttachmentError("You can attach up to 5 documents per message.");
+      toast("You can attach up to 5 documents per message.");
       return;
     }
-    setAttachmentError(undefined);
     setAttachments((current) => [...current, ...files]);
   }
 
@@ -52,7 +49,6 @@ export function Composer({
     void onSend(input.trim(), attachments);
     setInput("");
     setAttachments([]);
-    setAttachmentError(undefined);
     if (fileInput.current) fileInput.current.value = "";
   }
 
@@ -88,12 +84,6 @@ export function Composer({
             </span>
           ))}
         </div>
-      )}
-
-      {(attachmentError || error) && (
-        <p className="text-sm text-red-700" role="alert">
-          {attachmentError ?? error}
-        </p>
       )}
 
       <form

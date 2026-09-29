@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { models } from "@/lib/models";
 
 import { Composer } from "./composer";
+import { ToastProvider } from "./toast";
 
 afterEach(cleanup);
 
@@ -12,12 +13,14 @@ function renderComposer(busy = false) {
   const onSend = vi.fn();
   const onStop = vi.fn();
   render(
-    <Composer
-      model={models[0]}
-      busy={busy}
-      onSend={onSend}
-      onStop={onStop}
-    />,
+    <ToastProvider>
+      <Composer
+        model={models[0]}
+        busy={busy}
+        onSend={onSend}
+        onStop={onStop}
+      />
+    </ToastProvider>,
   );
   const box = screen.getByRole("textbox", { name: "Message" });
   fireEvent.change(box, { target: { value: "hello" } });
@@ -92,7 +95,7 @@ describe("Composer", () => {
     expect(screen.getByText("pasted.csv")).toBeTruthy();
   });
 
-  it("shows an inline error for an unsupported document", () => {
+  it("shows a toast for an unsupported document", () => {
     renderComposer();
 
     fireEvent.change(screen.getByLabelText("Choose documents"), {
@@ -101,7 +104,7 @@ describe("Composer", () => {
       },
     });
 
-    expect(screen.getByRole("alert").textContent).toBe(
+    expect(screen.getByRole("status").textContent).toBe(
       "photo.png isn't a supported document type.",
     );
   });

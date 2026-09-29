@@ -17,6 +17,7 @@
     "@ai-sdk/google": "^3.0.129",
     "@ai-sdk/openai": "^3.0.120",
     "@ai-sdk/react": "^3.0.299",
+    "@node-rs/argon2": "^2.2.1",
     "ai": "^6.0.296",
     "better-sqlite3": "^12.11.1",
     "drizzle-orm": "^0.45.3",

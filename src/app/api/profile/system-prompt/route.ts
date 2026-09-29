@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { requireUser } from "@/server/current-user";
+import { currentUser } from "@/server/current-user";
 import { SYSTEM_PROMPT_MAX_CHARS } from "@/server/db/schema";
 import {
   saveSystemPrompt,
@@ -12,7 +12,12 @@ const body = z.object({
 });
 
 export async function PUT(request: Request) {
-  const user = await requireUser();
+  const user = await currentUser();
+  if (!user) {
+    return new Response("You're logged out. Log in and try again.", {
+      status: 401,
+    });
+  }
   const parsed = body.safeParse(await request.json().catch(() => null));
   if (!parsed.success) {
     return new Response(
