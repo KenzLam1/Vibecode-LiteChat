@@ -65,17 +65,26 @@ export type ConversationServiceDeps = {
   now?: () => Date;
   // Called with the underlying error whenever a reply fails.
   onReplyError?: (error: unknown, model: CatalogModel) => void;
+  // How long a reply may go without sending anything before it counts as
+  // failed. Injected so tests don't wait.
+  replyIdleTimeoutMs?: number;
 };
 
 export type ConversationService = ReturnType<typeof createConversationService>;
 
 const NEW_CONVERSATION_TITLE = "New conversation";
 
+// A proxy connection can open and then never answer. Long enough for a slow
+// model to reason before its first token; well short of the ~5 minutes the
+// connection would otherwise hang for.
+export const REPLY_IDLE_TIMEOUT_MS = 90_000;
+
 export function createConversationService({
   db,
   modelFor,
   now = () => new Date(),
   onReplyError,
+  replyIdleTimeoutMs = REPLY_IDLE_TIMEOUT_MS,
 }: ConversationServiceDeps) {
   function findOwned(user: CurrentUser, id: string): Conversation | undefined {
     return db
@@ -175,9 +184,33 @@ export function createConversationService({
     conversation: Conversation,
     model: CatalogModel,
   ): Promise<Reply> {
+    const failedText = `${model.displayName} didn't answer. Please try again.`;
+
+    // Aborts the model call when nothing has arrived for a while, before the
+    // first token or between tokens.
+    const idle = new AbortController();
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    const resetIdleTimer = () => {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(
+        () =>
+          idle.abort(
+            new DOMException(
+              `No reply data for ${replyIdleTimeoutMs}ms`,
+              "TimeoutError",
+            ),
+          ),
+        replyIdleTimeoutMs,
+      );
+    };
+
+    const context = await buildContext(history(conversation.id));
+    resetIdleTimer();
     const result = streamText({
       ...modelFor(model),
-      messages: await buildContext(history(conversation.id)),
+      messages: context,
+      abortSignal: idle.signal,
+      onChunk: resetIdleTimer,
       // Failures are reported once, through the UI stream below.
       onError: () => {},
     });
@@ -187,9 +220,24 @@ export function createConversationService({
         generateMessageId: () => crypto.randomUUID(),
         onError: (error) => {
           onReplyError?.(error, model);
-          return `${model.displayName} didn't answer. Please try again.`;
+          return failedText;
         },
       })
+      // The AI SDK reports an abort as a stop, not a failure; a stalled reply
+      // is a failure, so it shows Try again and saves nothing.
+      .pipeThrough(
+        new TransformStream<ChatMessageChunk, ChatMessageChunk>({
+          transform(chunk, controller) {
+            if (chunk.type === "abort" && idle.signal.aborted) {
+              onReplyError?.(idle.signal.reason, model);
+              controller.enqueue({ type: "error", errorText: failedText });
+              return;
+            }
+            controller.enqueue(chunk);
+          },
+          flush: () => clearTimeout(idleTimer),
+        }),
+      )
       .tee();
 
     return {

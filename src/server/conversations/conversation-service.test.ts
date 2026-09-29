@@ -23,7 +23,8 @@ type LanguageModelV3StreamPart = Awaited<
 type Script =
   | { reply: string; reasoning?: string }
   | { failBeforeFirstToken: true }
-  | { failAfter: string };
+  | { failAfter: string }
+  | { stallAfter: string };
 
 const usage = {
   inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
@@ -37,6 +38,14 @@ function chunksFor(script: Script): LanguageModelV3StreamPart[] {
       { type: "text-delta", id: "t", delta: script.failAfter },
       { type: "error", error: new Error("upstream request failed") },
     ];
+  }
+  if ("stallAfter" in script) {
+    return script.stallAfter
+      ? [
+          { type: "text-start", id: "t" },
+          { type: "text-delta", id: "t", delta: script.stallAfter },
+        ]
+      : [];
   }
   if (!("reply" in script)) return [];
   const reasoning: LanguageModelV3StreamPart[] = script.reasoning
@@ -55,15 +64,34 @@ function chunksFor(script: Script): LanguageModelV3StreamPart[] {
   ];
 }
 
+// Sends its chunks, then goes quiet without closing, like a proxy connection
+// that stops answering. Aborting it fails the stream, as fetch does.
+function stalledStream(
+  chunks: LanguageModelV3StreamPart[],
+  abortSignal: AbortSignal | undefined,
+) {
+  return new ReadableStream<LanguageModelV3StreamPart>({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(chunk);
+      abortSignal?.addEventListener("abort", () =>
+        controller.error(abortSignal.reason),
+      );
+    },
+  });
+}
+
 // A mock model that plays one script per call, in order.
 function scriptedModel(...scripts: Script[]) {
   let call = 0;
   return new MockLanguageModelV3({
-    doStream: async () => {
+    doStream: async ({ abortSignal }) => {
       const script = scripts[call++];
       if (!script) throw new Error("The mock model has no script left");
       if ("failBeforeFirstToken" in script) {
         throw new Error("connection timed out");
+      }
+      if ("stallAfter" in script) {
+        return { stream: stalledStream(chunksFor(script), abortSignal) };
       }
       return {
         stream: simulateReadableStream({
@@ -113,6 +141,7 @@ function useModel(next: MockLanguageModelV3) {
     db,
     modelFor: () => ({ model }),
     now: () => new Date((clock += 1000)),
+    replyIdleTimeoutMs: 50,
   });
 }
 
@@ -215,6 +244,38 @@ describe("send", () => {
       type: "error",
       errorText: "Claude didn't answer. Please try again.",
     });
+  });
+
+  it("fails a reply that stalls before the first token instead of hanging", async () => {
+    useModel(scriptedModel({ stallAfter: "" }));
+    const { id } = await service.start(alice, "claude");
+
+    const reply = await service.send(alice, id, { text: "Hi" });
+    const chunks = await drain(reply.stream);
+    await reply.done;
+
+    expect(chunks).toContainEqual({
+      type: "error",
+      errorText: "Claude didn't answer. Please try again.",
+    });
+    const { messages } = (await service.open(alice, id))!;
+    expect(messages.map((m) => [m.role, textOf(m)])).toEqual([["user", "Hi"]]);
+  });
+
+  it("fails a reply that stalls mid-stream and saves nothing", async () => {
+    useModel(scriptedModel({ stallAfter: "Half an ans" }));
+    const { id } = await service.start(alice, "claude");
+
+    const reply = await service.send(alice, id, { text: "Hi" });
+    const chunks = await drain(reply.stream);
+    await reply.done;
+
+    expect(chunks).toContainEqual({
+      type: "error",
+      errorText: "Claude didn't answer. Please try again.",
+    });
+    const { messages } = (await service.open(alice, id))!;
+    expect(messages.map((m) => [m.role, textOf(m)])).toEqual([["user", "Hi"]]);
   });
 
   it("sends earlier turns back as text only, without their reasoning", async () => {

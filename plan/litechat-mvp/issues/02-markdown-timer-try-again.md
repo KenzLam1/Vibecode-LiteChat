@@ -12,7 +12,7 @@ See spec: User Stories 19–21, 26–29, 32, 38, 65.
 - [x] Code blocks are syntax-highlighted and Copy puts the exact code on the clipboard
 - [x] A very wide table scrolls inside the message without breaking the page layout
 - [x] The timer counts up until the first answer token and then disappears
-- [ ] A failed request shows an error and Try again instead of hanging; Try again produces a new reply
+- [x] A failed request shows an error and Try again instead of hanging; Try again produces a new reply
 - [x] Enter sends, Shift+Enter adds a new line, and send is disabled while a reply streams
 - [x] LiteChat colours and fonts are applied
 
@@ -26,3 +26,4 @@ See spec: User Stories 19–21, 26–29, 32, 38, 65.
 - **A hung proxy still hangs for about 5 minutes (box left unticked).** During the run the proxy was unreachable. Connect timeouts failed fast: 3 attempts in about 37s, then the route's error text and Try again. But one request connected and then got no response. The timer ran for about 300s until Node dropped the connection. The browser then showed the error, and Try again produced a normal reply. The route needs a timeout, for example `streamText({ timeout: { chunkMs } })` or an `abortSignal`, so a silent proxy becomes an error quickly. That belongs to the route and conversation service (ticket 03), not this UI ticket.
 - **Tests:** Vitest stays in the `node` environment. The two component test files opt into `happy-dom` with a `// @vitest-environment happy-dom` comment and use `@testing-library/react`.
 
+**2026-09-29 — hang fixed at merge.** The Conversation service now aborts a reply after `REPLY_IDLE_TIMEOUT_MS` (90s) with no data, both before the first token and between tokens, and reports it as a failed reply: the error shows Try again and nothing is saved. `timeout: { chunkMs }` alone wouldn't have covered this. The AI SDK only starts that timer at the first chunk, and it reports any abort as an `abort` chunk (a stop), not an error. Seam-1 tests cover a stall before the first token and one mid-stream. Live Claude and ChatGPT replies still finish normally with the timeout in place. ChatGPT's hidden reasoning doesn't reset the timer, so it has to start answering within 90s.
