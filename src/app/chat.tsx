@@ -1,7 +1,7 @@
 "use client";
 
 import { useChat } from "@ai-sdk/react";
-import { DefaultChatTransport } from "ai";
+import { DefaultChatTransport, type FileUIPart } from "ai";
 
 import type { CatalogModel } from "@/lib/models";
 import type { ChatMessage } from "@/server/db/schema";
@@ -27,9 +27,35 @@ const transport = new DefaultChatTransport<ChatMessage>({
     const text = (messages.at(-1)?.parts ?? [])
       .flatMap((part) => (part.type === "text" ? [part.text] : []))
       .join("");
-    return { body: { trigger, conversationId: id, text } };
+    const attachments = (messages.at(-1)?.parts ?? []).flatMap((part) =>
+      part.type === "file"
+        ? [
+            {
+              filename: part.filename ?? "document",
+              mediaType: part.mediaType,
+              url: part.url,
+            },
+          ]
+        : [],
+    );
+    return { body: { trigger, conversationId: id, text, attachments } };
   },
 });
+
+function filePart(file: File): Promise<FileUIPart> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () =>
+      resolve({
+        type: "file",
+        filename: file.name,
+        mediaType: file.type || "application/octet-stream",
+        url: String(reader.result),
+      });
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
 
 export function Chat({
   conversationId,
@@ -95,7 +121,13 @@ export function Chat({
         <Composer
           model={model}
           busy={busy}
-          onSend={(text) => void sendMessage({ text })}
+          error={error?.message}
+          onSend={async (text, files) => {
+            await sendMessage({
+              text,
+              files: await Promise.all(files.map(filePart)),
+            });
+          }}
         />
       </footer>
     </div>

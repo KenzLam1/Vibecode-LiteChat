@@ -15,6 +15,13 @@ import {
 } from "@/server/db/schema";
 
 import { buildContext } from "./context";
+import {
+  AttachmentError,
+  extractAttachments,
+  type AttachmentInput,
+} from "./attachments";
+
+export type { AttachmentInput } from "./attachments";
 
 // The Conversation service: the one place that reads and writes
 // conversations. Every operation takes the current user and only ever sees
@@ -276,17 +283,32 @@ export function createConversationService({
     async send(
       user: CurrentUser,
       id: string,
-      input: { text: string },
+      input: { text: string; attachments?: AttachmentInput[] },
     ): Promise<Reply> {
       const conversation = requireOwned(user, id);
       const model = requireLiveModel(conversation);
       const text = input.text.trim();
-      if (!text) {
+      if (!text && !input.attachments?.length) {
         throw new ConversationError("rejected", "Type a message to send.");
+      }
+      let attachments;
+      try {
+        attachments = await extractAttachments(input.attachments ?? []);
+      } catch (error) {
+        if (error instanceof AttachmentError) {
+          throw new ConversationError("rejected", error.message);
+        }
+        throw error;
       }
       saveMessage(conversation.id, {
         role: "user",
-        parts: [{ type: "text", text }],
+        parts: [
+          ...(text ? [{ type: "text" as const, text }] : []),
+          ...attachments.map((data) => ({
+            type: "data-attachment" as const,
+            data,
+          })),
+        ],
       });
       return streamReply(conversation, model);
     },

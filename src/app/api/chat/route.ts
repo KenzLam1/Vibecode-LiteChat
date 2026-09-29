@@ -11,6 +11,15 @@ const body = z.discriminatedUnion("trigger", [
     trigger: z.literal("submit-message"),
     conversationId: z.string(),
     text: z.string(),
+    attachments: z
+      .array(
+        z.object({
+          filename: z.string().min(1),
+          mediaType: z.string(),
+          url: z.string().startsWith("data:"),
+        }),
+      )
+      .optional(),
   }),
   z.object({
     trigger: z.literal("regenerate-message"),
@@ -32,6 +41,19 @@ export async function POST(request: Request) {
       input.trigger === "submit-message"
         ? await conversations.send(user, input.conversationId, {
             text: input.text,
+            attachments: input.attachments?.map((attachment) => {
+              const comma = attachment.url.indexOf(",");
+              const header = attachment.url.slice(0, comma);
+              const encoded = attachment.url.slice(comma + 1);
+              const data = header.endsWith(";base64")
+                ? Uint8Array.from(Buffer.from(encoded, "base64"))
+                : new TextEncoder().encode(decodeURIComponent(encoded));
+              return {
+                filename: attachment.filename,
+                mediaType: attachment.mediaType,
+                data,
+              };
+            }),
           })
         : await conversations.regenerate(user, input.conversationId);
     return createUIMessageStreamResponse({ stream: reply.stream });

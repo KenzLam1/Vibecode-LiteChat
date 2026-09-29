@@ -8,6 +8,7 @@ import { users } from "@/server/db/schema";
 import {
   ConversationError,
   createConversationService,
+  type AttachmentInput,
   type ConversationService,
 } from "./service";
 
@@ -119,6 +120,18 @@ function textOf(message: { parts: { type: string; text?: string }[] }) {
     .join("");
 }
 
+function attachment(
+  filename: string,
+  contents: string,
+  mediaType = "text/plain",
+): AttachmentInput {
+  return {
+    filename,
+    mediaType,
+    data: new TextEncoder().encode(contents),
+  };
+}
+
 let db: Db;
 let alice: CurrentUser;
 let bob: CurrentUser;
@@ -168,6 +181,133 @@ describe("start and open", () => {
 });
 
 describe("send", () => {
+  it("truncates attachment text over 50,000 characters before saving it", async () => {
+    useModel(scriptedModel({ reply: "Done" }));
+    const { id } = await service.start(alice, "claude");
+
+    const reply = await service.send(alice, id, {
+      text: "Summarise this",
+      attachments: [attachment("notes.txt", "a".repeat(50_001))],
+    });
+    await drain(reply.stream);
+    await reply.done;
+
+    const { messages } = (await service.open(alice, id))!;
+    expect(messages[0].parts).toContainEqual({
+      type: "data-attachment",
+      data: {
+        filename: "notes.txt",
+        size: 50_001,
+        text: "a".repeat(50_000),
+        truncated: true,
+      },
+    });
+  });
+
+  it("rejects a disallowed attachment before saving the user message", async () => {
+    useModel(scriptedModel({ reply: "Should not run" }));
+    const { id } = await service.start(alice, "claude");
+
+    await expect(
+      service.send(alice, id, {
+        text: "Describe this",
+        attachments: [attachment("photo.png", "not really an image", "image/png")],
+      }),
+    ).rejects.toMatchObject({
+      reason: "rejected",
+      message: "photo.png isn't a supported document type.",
+    });
+
+    expect(model.doStreamCalls).toHaveLength(0);
+    expect((await service.open(alice, id))!.messages).toEqual([]);
+  });
+
+  it("rejects more than five attachments before saving the user message", async () => {
+    useModel(scriptedModel({ reply: "Should not run" }));
+    const { id } = await service.start(alice, "claude");
+
+    await expect(
+      service.send(alice, id, {
+        text: "Compare these",
+        attachments: Array.from({ length: 6 }, (_, index) =>
+          attachment(`note-${index}.txt`, `Note ${index}`),
+        ),
+      }),
+    ).rejects.toMatchObject({
+      reason: "rejected",
+      message: "You can attach up to 5 documents per message.",
+    });
+
+    expect(model.doStreamCalls).toHaveLength(0);
+    expect((await service.open(alice, id))!.messages).toEqual([]);
+  });
+
+  it("rejects a PDF with no extractable text before saving", async () => {
+    useModel(scriptedModel({ reply: "Should not run" }));
+    const { id } = await service.start(alice, "claude");
+    const blankPdf = [
+      "%PDF-1.4",
+      "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj",
+      "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj",
+      "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >> endobj",
+      "trailer << /Root 1 0 R >>",
+      "%%EOF",
+    ].join("\n");
+
+    await expect(
+      service.send(alice, id, {
+        text: "Read this",
+        attachments: [attachment("scan.pdf", blankPdf, "application/pdf")],
+      }),
+    ).rejects.toMatchObject({
+      reason: "rejected",
+      message: "No text found in scan.pdf. Scanned PDFs aren't supported.",
+    });
+
+    expect(model.doStreamCalls).toHaveLength(0);
+    expect((await service.open(alice, id))!.messages).toEqual([]);
+  });
+
+  it("sends attachment text with a filename label now and on later turns", async () => {
+    useModel(scriptedModel({ reply: "First answer" }, { reply: "Second answer" }));
+    const { id } = await service.start(alice, "claude");
+
+    const first = await service.send(alice, id, {
+      text: "What does this say?",
+      attachments: [attachment("brief.md", "Project North Star")],
+    });
+    await drain(first.stream);
+    await first.done;
+    const second = await service.send(alice, id, { text: "What was its name?" });
+    await drain(second.stream);
+    await second.done;
+
+    const attachmentPart = {
+      type: "text",
+      text: "[Attached file: brief.md]\nProject North Star",
+    };
+    expect(model.doStreamCalls[0].prompt).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "What does this say?" },
+          attachmentPart,
+        ],
+      },
+    ]);
+    expect(model.doStreamCalls[1].prompt).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "What does this say?" },
+          attachmentPart,
+        ],
+      },
+      { role: "assistant", content: [{ type: "text", text: "First answer" }] },
+      { role: "user", content: [{ type: "text", text: "What was its name?" }] },
+    ]);
+  });
+
   it("saves the user message and the finished reply", async () => {
     useModel(scriptedModel({ reply: "Hello there!" }));
     const { id } = await service.start(alice, "claude");

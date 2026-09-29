@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 
 import type { CatalogModel } from "@/lib/models";
 
@@ -9,19 +9,49 @@ import type { CatalogModel } from "@/lib/models";
 export function Composer({
   model,
   busy,
+  error,
   onSend,
 }: {
   model: CatalogModel;
   busy: boolean;
-  onSend: (text: string) => void;
+  error?: string;
+  onSend: (text: string, attachments: File[]) => void | Promise<void>;
 }) {
   const [input, setInput] = useState("");
-  const canSend = !busy && input.trim().length > 0;
+  const [attachments, setAttachments] = useState<File[]>([]);
+  const [attachmentError, setAttachmentError] = useState<string>();
+  const fileInput = useRef<HTMLInputElement>(null);
+  const canSend =
+    !busy && (input.trim().length > 0 || attachments.length > 0);
+
+  function stage(files: File[]) {
+    if (files.length === 0) return;
+    const allowed = [".pdf", ".txt", ".md", ".csv", ".json"];
+    const unsupported = files.find(
+      (file) =>
+        !allowed.some((extension) => file.name.toLowerCase().endsWith(extension)),
+    );
+    if (unsupported) {
+      setAttachmentError(
+        `${unsupported.name} isn't a supported document type.`,
+      );
+      return;
+    }
+    if (attachments.length + files.length > 5) {
+      setAttachmentError("You can attach up to 5 documents per message.");
+      return;
+    }
+    setAttachmentError(undefined);
+    setAttachments((current) => [...current, ...files]);
+  }
 
   function send() {
     if (!canSend) return;
-    onSend(input.trim());
+    void onSend(input.trim(), attachments);
     setInput("");
+    setAttachments([]);
+    setAttachmentError(undefined);
+    if (fileInput.current) fileInput.current.value = "";
   }
 
   return (
@@ -33,8 +63,44 @@ export function Composer({
         </span>
       </div>
 
+      {attachments.length > 0 && (
+        <div className="flex flex-wrap gap-2" aria-label="Attached documents">
+          {attachments.map((file, index) => (
+            <span
+              key={`${file.name}-${file.size}-${index}`}
+              className="inline-flex items-center gap-1 rounded-full border border-primary/30 bg-white px-2.5 py-1 text-sm text-gray-700"
+            >
+              {file.name}
+              <button
+                type="button"
+                aria-label={`Remove ${file.name}`}
+                className="ml-1 text-gray-400 hover:text-gray-700"
+                onClick={() =>
+                  setAttachments((current) =>
+                    current.filter((_, attachmentIndex) => attachmentIndex !== index),
+                  )
+                }
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {(attachmentError || error) && (
+        <p className="text-sm text-red-700" role="alert">
+          {attachmentError ?? error}
+        </p>
+      )}
+
       <form
         className="flex items-end gap-2 rounded-xl border border-gray-300 bg-white p-2 shadow-sm focus-within:border-primary"
+        onDragOver={(event) => event.preventDefault()}
+        onDrop={(event: DragEvent<HTMLFormElement>) => {
+          event.preventDefault();
+          if (!busy) stage(Array.from(event.dataTransfer.files));
+        }}
         onSubmit={(event) => {
           event.preventDefault();
           send();
@@ -47,6 +113,13 @@ export function Composer({
           placeholder={`Message ${model.displayName}…`}
           value={input}
           onChange={(event) => setInput(event.target.value)}
+          onPaste={(event: ClipboardEvent<HTMLTextAreaElement>) => {
+            const files = Array.from(event.clipboardData.files);
+            if (files.length > 0 && !busy) {
+              event.preventDefault();
+              stage(files);
+            }
+          }}
           onKeyDown={(event) => {
             if (
               event.key === "Enter" &&
@@ -58,6 +131,29 @@ export function Composer({
             }
           }}
         />
+        {model.capabilities.documents && (
+          <>
+            <input
+              ref={fileInput}
+              className="sr-only"
+              type="file"
+              aria-label="Choose documents"
+              accept=".pdf,.txt,.md,.csv,.json"
+              multiple
+              disabled={busy}
+              onChange={(event) => stage(Array.from(event.target.files ?? []))}
+            />
+            <button
+              type="button"
+              aria-label="Attach documents"
+              disabled={busy}
+              className="flex size-9 shrink-0 items-center justify-center rounded-lg text-xl text-gray-500 hover:bg-gray-100 disabled:opacity-40"
+              onClick={() => fileInput.current?.click()}
+            >
+              📎
+            </button>
+          </>
+        )}
         <button
           type="submit"
           aria-label="Send"

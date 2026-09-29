@@ -22,7 +22,7 @@ describe("Composer", () => {
 
     fireEvent.keyDown(box, { key: "Enter" });
 
-    expect(onSend).toHaveBeenCalledWith("hello");
+    expect(onSend).toHaveBeenCalledWith("hello", []);
     expect((box as HTMLTextAreaElement).value).toBe("");
   });
 
@@ -49,5 +49,54 @@ describe("Composer", () => {
     ).toBe(true);
     // What was typed is kept for when the reply finishes.
     expect((box as HTMLTextAreaElement).value).toBe("hello");
+  });
+
+  it("stages and removes a document chosen with the attachment button", () => {
+    renderComposer();
+    const document = new File(["hello"], "notes.txt", {
+      type: "text/plain",
+    });
+
+    fireEvent.change(screen.getByLabelText("Choose documents"), {
+      target: { files: [document] },
+    });
+
+    expect(screen.getByText("notes.txt")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Remove notes.txt" }));
+    expect(screen.queryByText("notes.txt")).toBeNull();
+  });
+
+  it("stages documents dropped onto or pasted into the composer", () => {
+    renderComposer();
+    const box = screen.getByRole("textbox");
+    const form = box.closest("form")!;
+
+    fireEvent.drop(form, {
+      dataTransfer: {
+        files: [new File(["one"], "dropped.md", { type: "text/markdown" })],
+      },
+    });
+    fireEvent.paste(box, {
+      clipboardData: {
+        files: [new File(["two"], "pasted.csv", { type: "text/csv" })],
+      },
+    });
+
+    expect(screen.getByText("dropped.md")).toBeTruthy();
+    expect(screen.getByText("pasted.csv")).toBeTruthy();
+  });
+
+  it("shows an inline error for an unsupported document", () => {
+    renderComposer();
+
+    fireEvent.change(screen.getByLabelText("Choose documents"), {
+      target: {
+        files: [new File(["image"], "photo.png", { type: "image/png" })],
+      },
+    });
+
+    expect(screen.getByRole("alert").textContent).toBe(
+      "photo.png isn't a supported document type.",
+    );
   });
 });

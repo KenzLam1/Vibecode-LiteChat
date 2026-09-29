@@ -33,11 +33,50 @@ export function hasAnswer(message: UIMessage): boolean {
   return answerText(message).trim().length > 0;
 }
 
+function attachments(message: UIMessage) {
+  return message.parts.flatMap((part) => {
+    if (part.type === "file") {
+      return [{ filename: part.filename ?? "document", truncated: false }];
+    }
+    if (part.type === "data-attachment") {
+      const data = part.data as { filename: string; truncated: boolean };
+      return [{ filename: data.filename, truncated: data.truncated }];
+    }
+    return [];
+  });
+}
+
 // User text is shown as typed; replies are rendered as markdown. A reply with
 // no answer text yet renders nothing: the thinking timer stands in for it.
 export function MessageBubble({ message }: { message: UIMessage }) {
   if (message.role === "user") {
-    return <UserBubble>{answerText(message)}</UserBubble>;
+    const documents = attachments(message);
+    return (
+      <UserBubble>
+        <div className="flex flex-col gap-2">
+          {documents.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {documents.map((document, index) => (
+                <span
+                  key={`${document.filename}-${index}`}
+                  className="rounded-full bg-white/20 px-2.5 py-1 text-xs font-medium"
+                >
+                  {document.filename}
+                </span>
+              ))}
+            </div>
+          )}
+          {answerText(message) && <span>{answerText(message)}</span>}
+          {documents
+            .filter((document) => document.truncated)
+            .map((document, index) => (
+              <span key={`${document.filename}-truncated-${index}`} className="text-xs text-white/80">
+                {document.filename} was truncated to its first 50,000 characters.
+              </span>
+            ))}
+        </div>
+      </UserBubble>
+    );
   }
   if (!hasAnswer(message)) return null;
   return (

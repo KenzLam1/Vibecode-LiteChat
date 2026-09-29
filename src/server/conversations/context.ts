@@ -16,9 +16,20 @@ export async function buildContext(
   history: ChatMessage[],
 ): Promise<ModelMessage[]> {
   const textOnly = history.flatMap((message) => {
-    const parts = message.parts.flatMap((part) =>
-      part.type === "text" ? [{ type: "text" as const, text: part.text }] : [],
-    );
+    const parts = message.parts.flatMap((part) => {
+      if (part.type === "text") {
+        return [{ type: "text" as const, text: part.text }];
+      }
+      if (part.type === "data-attachment") {
+        return [
+          {
+            type: "text" as const,
+            text: `[Attached file: ${part.data.filename}]\n${part.data.text}`,
+          },
+        ];
+      }
+      return [];
+    });
     if (parts.length === 0) return [];
     return [{ id: message.id, role: message.role, parts }];
   });
