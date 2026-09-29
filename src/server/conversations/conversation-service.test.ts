@@ -32,6 +32,15 @@ const usage = {
   outputTokens: { total: 1, text: 1, reasoning: 0 },
 };
 
+function generatedText(text: string) {
+  return {
+    content: [{ type: "text" as const, text }],
+    finishReason: { unified: "stop" as const, raw: "stop" },
+    usage,
+    warnings: [],
+  };
+}
+
 function chunksFor(script: Script): LanguageModelV3StreamPart[] {
   if ("failAfter" in script) {
     return [
@@ -101,6 +110,14 @@ function scriptedModel(...scripts: Script[]) {
         }),
       };
     },
+  });
+}
+
+function titledModel(title: string, ...scripts: Script[]) {
+  const streaming = scriptedModel(...scripts);
+  return new MockLanguageModelV3({
+    doStream: (options) => streaming.doStream(options),
+    doGenerate: generatedText(title),
   });
 }
 
@@ -424,6 +441,119 @@ describe("retired models", () => {
       service.send(alice, conversation.id, { text: "Can you still answer?" }),
     ).rejects.toMatchObject({ reason: "rejected" });
     expect(model.doStreamCalls).toHaveLength(0);
+  });
+});
+
+describe("titles", () => {
+  it("sets a fallback title from the first message immediately", async () => {
+    useModel(scriptedModel({ failBeforeFirstToken: true }));
+    const conversation = await service.start(alice, "claude");
+
+    const reply = await service.send(alice, conversation.id, {
+      text: "123456789012345678901234567890123456789012345",
+    });
+
+    expect((await service.open(alice, conversation.id))?.conversation).toMatchObject(
+      {
+        title: "123456789012345678901234567890123456789…",
+        titleSource: "fallback",
+      },
+    );
+    await drain(reply.stream);
+    await reply.done;
+  });
+
+  it("replaces the fallback with an AI title after the first reply", async () => {
+    useModel(titledModel("How Plants Make Energy", { reply: "With sunlight." }));
+    const conversation = await service.start(alice, "claude");
+
+    const reply = await service.send(alice, conversation.id, {
+      text: "How does photosynthesis work?",
+    });
+    await drain(reply.stream);
+    await reply.done;
+
+    expect((await service.open(alice, conversation.id))?.conversation).toMatchObject(
+      {
+        title: "How Plants Make Energy",
+        titleSource: "auto",
+      },
+    );
+    expect(model.doGenerateCalls[0].maxOutputTokens).toBeGreaterThanOrEqual(800);
+  });
+
+  it("keeps the fallback when the title call fails", async () => {
+    useModel(scriptedModel({ reply: "Answer one." }));
+    const conversation = await service.start(alice, "claude");
+    const reply = await service.send(alice, conversation.id, {
+      text: "Keep this fallback",
+    });
+    await drain(reply.stream);
+    await reply.done;
+
+    expect((await service.open(alice, conversation.id))?.conversation).toMatchObject(
+      {
+        title: "Keep this fallback",
+        titleSource: "fallback",
+      },
+    );
+  });
+
+  it("keeps the fallback when the title call returns empty", async () => {
+    useModel(titledModel("   ", { reply: "Answer two." }));
+    const conversation = await service.start(alice, "claude");
+    const reply = await service.send(alice, conversation.id, {
+      text: "Keep this fallback",
+    });
+    await drain(reply.stream);
+    await reply.done;
+
+    expect((await service.open(alice, conversation.id))?.conversation).toMatchObject(
+      {
+        title: "Keep this fallback",
+        titleSource: "fallback",
+      },
+    );
+  });
+
+  it("never replaces a user rename, including while a title is in flight", async () => {
+    let titleStarted!: () => void;
+    let finishTitle!: (value: ReturnType<typeof generatedText>) => void;
+    const started = new Promise<void>((resolve) => {
+      titleStarted = resolve;
+    });
+    const titleResult = new Promise<ReturnType<typeof generatedText>>(
+      (resolve) => {
+        finishTitle = resolve;
+      },
+    );
+    const streaming = scriptedModel({ reply: "A finished answer." });
+    useModel(
+      new MockLanguageModelV3({
+        doStream: (options) => streaming.doStream(options),
+        doGenerate: async () => {
+          titleStarted();
+          return titleResult;
+        },
+      }),
+    );
+    const conversation = await service.start(alice, "claude");
+    const reply = await service.send(alice, conversation.id, {
+      text: "A title-worthy question",
+    });
+    await drain(reply.stream);
+    await started;
+
+    await service.rename(alice, conversation.id, "My chosen title");
+    finishTitle(generatedText("Late automatic title"));
+    await reply.done;
+
+    expect((await service.open(alice, conversation.id))?.conversation).toMatchObject(
+      {
+        title: "My chosen title",
+        titleSource: "user",
+      },
+    );
   });
 });
 

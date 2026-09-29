@@ -2,6 +2,8 @@
 
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
+import { useRouter } from "next/navigation";
+import { useEffect, useRef } from "react";
 
 import type { CatalogModel } from "@/lib/models";
 import type { ChatMessage } from "@/server/db/schema";
@@ -40,12 +42,23 @@ export function Chat({
   model: CatalogModel;
   initialMessages: ChatMessage[];
 }) {
+  const router = useRouter();
   const { messages, sendMessage, regenerate, status, error } =
     useChat<ChatMessage>({
       id: conversationId,
       messages: initialMessages,
       transport,
     });
+  const previousStatus = useRef(status);
+  useEffect(() => {
+    if (
+      previousStatus.current !== status &&
+      (status === "streaming" || status === "ready" || status === "error")
+    ) {
+      router.refresh();
+    }
+    previousStatus.current = status;
+  }, [router, status]);
   const busy = status === "submitted" || status === "streaming";
   const lastMessage = messages.at(-1);
   // The timer runs from the request until the first answer token; reasoning

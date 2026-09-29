@@ -15,6 +15,7 @@ import {
 } from "@/server/db/schema";
 
 import { buildContext } from "./context";
+import { applyAutomaticTitle, applyFallbackTitle } from "./titles";
 
 // The Conversation service: the one place that reads and writes
 // conversations. Every operation takes the current user and only ever sees
@@ -155,6 +156,7 @@ export function createConversationService({
   // finished; a reply that failed at any point saves nothing.
   async function saveWhenFinished(
     conversationId: string,
+    modelSettings: ModelSettings,
     stream: ReadableStream<ChatMessageChunk>,
   ) {
     let reply: ChatMessage | undefined;
@@ -175,6 +177,7 @@ export function createConversationService({
         role: "assistant",
         parts: reply.parts,
       });
+      await applyAutomaticTitle(db, conversationId, modelSettings);
     } catch (error) {
       console.error(`[conversations] saving a reply failed:`, error);
     }
@@ -205,9 +208,10 @@ export function createConversationService({
     };
 
     const context = await buildContext(history(conversation.id));
+    const modelSettings = modelFor(model);
     resetIdleTimer();
     const result = streamText({
-      ...modelFor(model),
+      ...modelSettings,
       messages: context,
       abortSignal: idle.signal,
       onChunk: resetIdleTimer,
@@ -242,7 +246,7 @@ export function createConversationService({
 
     return {
       stream: toBrowser,
-      done: saveWhenFinished(conversation.id, toServer),
+      done: saveWhenFinished(conversation.id, modelSettings, toServer),
     };
   }
 
@@ -326,6 +330,7 @@ export function createConversationService({
         role: "user",
         parts: [{ type: "text", text }],
       });
+      applyFallbackTitle(db, conversation.id, text);
       return streamReply(conversation, model);
     },
 
