@@ -1,0 +1,12 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-primary: #0780b5;
+  --font-sans: var(--font-inter);
+  --font-display: var(--font-fredoka);
+}
+
+body {
+  background: #ffffff;
+  color: #171717;
+}

@@ -3,3 +3,10 @@
 node_modules/
 .next/
 *.db
+# SQLite database and its WAL/journal files
+/data/
+*.db-*
+# Next.js / TypeScript generated
+next-env.d.ts
+*.tsbuildinfo
+.DS_Store
