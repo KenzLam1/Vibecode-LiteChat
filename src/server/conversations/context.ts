@@ -2,6 +2,28 @@ import { convertToModelMessages, type ModelMessage } from "ai";
 
 import type { ChatMessage } from "@/server/db/schema";
 
+export const CONTEXT_TOKEN_BUDGET = 100_000;
+
+export class ContextBudgetError extends Error {}
+
+export type BuiltContext = {
+  messages: ModelMessage[];
+  dropped: boolean;
+};
+
+type TextMessage = {
+  id: string;
+  role: ChatMessage["role"];
+  parts: { type: "text"; text: string }[];
+};
+
+function estimatedTokens(message: TextMessage): number {
+  return Math.ceil(
+    message.parts.reduce((characters, part) => characters + part.text.length, 0) /
+      4,
+  );
+}
+
 // The context builder: what the model sees on a turn, built from the saved
 // conversation (oldest first, ending with the message being answered).
 //
@@ -9,13 +31,14 @@ import type { ChatMessage } from "@/server/db/schema";
 // provider metadata would make the OpenAI route send item references the
 // stateless proxy can't resolve.
 //
-// Still to come: the user's system prompt goes first (ticket 10), and earlier
-// turns are dropped oldest-first past the token budget, reporting whether any
-// were dropped (ticket 09). Attachments become labelled text (ticket 08).
+// Attachments become labelled text. Earlier turns are dropped oldest-first
+// past the token budget and the result reports when that happened. The user's
+// system prompt will go first (ticket 10).
 export async function buildContext(
   history: ChatMessage[],
-): Promise<ModelMessage[]> {
-  const textOnly = history.flatMap((message) => {
+  { tokenBudget = CONTEXT_TOKEN_BUDGET }: { tokenBudget?: number } = {},
+): Promise<BuiltContext> {
+  const textOnly: TextMessage[] = history.flatMap((message) => {
     const parts = message.parts.flatMap((part) => {
       if (part.type === "text") {
         return [{ type: "text" as const, text: part.text }];
@@ -33,5 +56,26 @@ export async function buildContext(
     if (parts.length === 0) return [];
     return [{ id: message.id, role: message.role, parts }];
   });
-  return convertToModelMessages(textOnly);
+  const newest = textOnly.at(-1);
+  if (!newest) return { messages: [], dropped: false };
+  if (estimatedTokens(newest) > tokenBudget) {
+    throw new ContextBudgetError(
+      "These attachments are too large to send together. Try fewer files.",
+    );
+  }
+
+  let remaining = tokenBudget - estimatedTokens(newest);
+  const selected = [newest];
+  const earlier = textOnly.slice(0, -1);
+  for (let index = earlier.length - 1; index >= 0; index -= 1) {
+    const cost = estimatedTokens(earlier[index]);
+    if (cost > remaining) break;
+    selected.unshift(earlier[index]);
+    remaining -= cost;
+  }
+
+  return {
+    messages: await convertToModelMessages(selected),
+    dropped: selected.length < textOnly.length,
+  };
 }

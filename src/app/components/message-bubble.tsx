@@ -46,6 +46,22 @@ function attachments(message: UIMessage) {
   });
 }
 
+function droppedContext(message: UIMessage): boolean {
+  return message.parts.some(
+    (part) =>
+      part.type === "data-context" &&
+      (part.data as { dropped?: boolean }).dropped === true,
+  );
+}
+
+function ContextNote() {
+  return (
+    <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
+      Older messages are no longer included in the model&apos;s context.
+    </p>
+  );
+}
+
 // User text is shown as typed; replies are rendered as markdown. A reply with
 // no answer text yet renders nothing: the thinking timer stands in for it.
 export function MessageBubble({ message }: { message: UIMessage }) {
@@ -78,9 +94,17 @@ export function MessageBubble({ message }: { message: UIMessage }) {
       </UserBubble>
     );
   }
-  if (!hasAnswer(message)) return null;
+  const contextWasDropped = droppedContext(message);
+  if (!hasAnswer(message)) {
+    return contextWasDropped ? (
+      <AssistantBubble>
+        <ContextNote />
+      </AssistantBubble>
+    ) : null;
+  }
   return (
     <AssistantBubble>
+      {contextWasDropped && <ContextNote />}
       <Markdown>{answerText(message)}</Markdown>
     </AssistantBubble>
   );

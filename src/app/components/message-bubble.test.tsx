@@ -37,3 +37,24 @@ describe("MessageBubble attachments", () => {
     ).toBeTruthy();
   });
 });
+
+describe("MessageBubble context note", () => {
+  it("shows when older messages were dropped from the model context", () => {
+    const message: ChatMessage = {
+      id: "message-2",
+      role: "assistant",
+      parts: [
+        { type: "data-context", data: { dropped: true } },
+        { type: "text", text: "Here is the answer." },
+      ],
+    };
+
+    render(<MessageBubble message={message} />);
+
+    expect(
+      screen.getByText(
+        "Older messages are no longer included in the model's context.",
+      ),
+    ).toBeTruthy();
+  });
+});

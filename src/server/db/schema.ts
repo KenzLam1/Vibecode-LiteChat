@@ -87,7 +87,11 @@ export type AttachmentData = {
   text: string;
   truncated: boolean;
 };
-export type ChatMessage = UIMessage<never, { attachment: AttachmentData }>;
+export type ContextData = { dropped: true };
+export type ChatMessage = UIMessage<
+  never,
+  { attachment: AttachmentData; context: ContextData }
+>;
 
 export const messages = sqliteTable(
   "messages",

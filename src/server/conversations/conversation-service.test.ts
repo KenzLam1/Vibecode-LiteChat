@@ -148,13 +148,17 @@ function addUser(username: string): CurrentUser {
 }
 
 // Every service call sees a clock that has moved on by one second.
-function useModel(next: MockLanguageModelV3) {
+function useModel(
+  next: MockLanguageModelV3,
+  options: { contextTokenBudget?: number } = {},
+) {
   model = next;
   service = createConversationService({
     db,
     modelFor: () => ({ model }),
     now: () => new Date((clock += 1000)),
     replyIdleTimeoutMs: 50,
+    ...options,
   });
 }
 
@@ -306,6 +310,60 @@ describe("send", () => {
       { role: "assistant", content: [{ type: "text", text: "First answer" }] },
       { role: "user", content: [{ type: "text", text: "What was its name?" }] },
     ]);
+  });
+
+  it("keeps only the newest turns that fit and reports dropped context", async () => {
+    useModel(
+      scriptedModel(
+        { reply: "old answer" },
+        { reply: "recent answer" },
+        { reply: "new answer" },
+      ),
+      { contextTokenBudget: 12 },
+    );
+    const { id } = await service.start(alice, "claude");
+    for (const text of ["old question", "recent question"]) {
+      const reply = await service.send(alice, id, { text });
+      await drain(reply.stream);
+      await reply.done;
+    }
+
+    const reply = await service.send(alice, id, { text: "newest question" });
+    await drain(reply.stream);
+    await reply.done;
+
+    expect(reply.droppedContext).toBe(true);
+    expect(model.doStreamCalls[2].prompt).toEqual([
+      { role: "user", content: [{ type: "text", text: "recent question" }] },
+      { role: "assistant", content: [{ type: "text", text: "recent answer" }] },
+      { role: "user", content: [{ type: "text", text: "newest question" }] },
+    ]);
+    const opened = await service.open(alice, id);
+    expect(opened?.messages.at(-1)?.parts).toContainEqual({
+      type: "data-context",
+      data: { dropped: true },
+    });
+  });
+
+  it("rejects an over-budget newest message before saving or calling the model", async () => {
+    useModel(scriptedModel({ reply: "Should not run" }), {
+      contextTokenBudget: 3,
+    });
+    const { id } = await service.start(alice, "claude");
+
+    await expect(
+      service.send(alice, id, {
+        text: "Read this",
+        attachments: [attachment("large.txt", "far too much attachment text")],
+      }),
+    ).rejects.toMatchObject({
+      reason: "rejected",
+      message:
+        "These attachments are too large to send together. Try fewer files.",
+    });
+
+    expect(model.doStreamCalls).toHaveLength(0);
+    expect((await service.open(alice, id))!.messages).toEqual([]);
   });
 
   it("saves the user message and the finished reply", async () => {

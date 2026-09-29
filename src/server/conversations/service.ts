@@ -14,7 +14,12 @@ import {
   type ChatMessage,
 } from "@/server/db/schema";
 
-import { buildContext } from "./context";
+import {
+  buildContext,
+  CONTEXT_TOKEN_BUDGET,
+  ContextBudgetError,
+  type BuiltContext,
+} from "./context";
 import {
   AttachmentError,
   extractAttachments,
@@ -42,6 +47,7 @@ export type ChatMessageChunk = InferUIMessageChunk<ChatMessage>;
 export type Reply = {
   stream: ReadableStream<ChatMessageChunk>;
   done: Promise<void>;
+  droppedContext: boolean;
 };
 
 export class ConversationError extends Error {
@@ -75,6 +81,7 @@ export type ConversationServiceDeps = {
   // How long a reply may go without sending anything before it counts as
   // failed. Injected so tests don't wait.
   replyIdleTimeoutMs?: number;
+  contextTokenBudget?: number;
 };
 
 export type ConversationService = ReturnType<typeof createConversationService>;
@@ -92,6 +99,7 @@ export function createConversationService({
   now = () => new Date(),
   onReplyError,
   replyIdleTimeoutMs = REPLY_IDLE_TIMEOUT_MS,
+  contextTokenBudget = CONTEXT_TOKEN_BUDGET,
 }: ConversationServiceDeps) {
   function findOwned(user: CurrentUser, id: string): Conversation | undefined {
     return db
@@ -190,6 +198,7 @@ export function createConversationService({
   async function streamReply(
     conversation: Conversation,
     model: CatalogModel,
+    preparedContext?: BuiltContext,
   ): Promise<Reply> {
     const failedText = `${model.displayName} didn't answer. Please try again.`;
 
@@ -211,11 +220,15 @@ export function createConversationService({
       );
     };
 
-    const context = await buildContext(history(conversation.id));
+    const context =
+      preparedContext ??
+      (await buildContext(history(conversation.id), {
+        tokenBudget: contextTokenBudget,
+      }));
     resetIdleTimer();
     const result = streamText({
       ...modelFor(model),
-      messages: context,
+      messages: context.messages,
       abortSignal: idle.signal,
       onChunk: resetIdleTimer,
       // Failures are reported once, through the UI stream below.
@@ -235,6 +248,14 @@ export function createConversationService({
       .pipeThrough(
         new TransformStream<ChatMessageChunk, ChatMessageChunk>({
           transform(chunk, controller) {
+            if (chunk.type === "start" && context.dropped) {
+              controller.enqueue(chunk);
+              controller.enqueue({
+                type: "data-context",
+                data: { dropped: true },
+              });
+              return;
+            }
             if (chunk.type === "abort" && idle.signal.aborted) {
               onReplyError?.(idle.signal.reason, model);
               controller.enqueue({ type: "error", errorText: failedText });
@@ -250,6 +271,7 @@ export function createConversationService({
     return {
       stream: toBrowser,
       done: saveWhenFinished(conversation.id, toServer),
+      droppedContext: context.dropped,
     };
   }
 
@@ -300,7 +322,8 @@ export function createConversationService({
         }
         throw error;
       }
-      saveMessage(conversation.id, {
+      const userMessage = {
+        id: crypto.randomUUID(),
         role: "user",
         parts: [
           ...(text ? [{ type: "text" as const, text }] : []),
@@ -309,8 +332,21 @@ export function createConversationService({
             data,
           })),
         ],
-      });
-      return streamReply(conversation, model);
+      } satisfies ChatMessage;
+      let context;
+      try {
+        context = await buildContext(
+          [...history(conversation.id), userMessage],
+          { tokenBudget: contextTokenBudget },
+        );
+      } catch (error) {
+        if (error instanceof ContextBudgetError) {
+          throw new ConversationError("rejected", error.message);
+        }
+        throw error;
+      }
+      saveMessage(conversation.id, userMessage);
+      return streamReply(conversation, model, context);
     },
 
     // Streams a new reply to the saved, unanswered last user message.
