@@ -6,6 +6,8 @@ import { eq } from "drizzle-orm";
 import type { Db } from "@/server/db";
 import { loginSessions, users } from "@/server/db/schema";
 
+import { LOGIN_SESSION_DAYS } from "./login-session-cookie";
+
 // The Account service: open sign-up, login, login-session resolution and
 // logout, hand-rolled per ADR 0003 and the Lucia guide (lucia-auth.com).
 
@@ -37,7 +39,6 @@ export const PASSWORD_MAX_CHARS = 256;
 const USERNAME_PATTERN = /^[a-z0-9_.-]{3,32}$/;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-export const LOGIN_SESSION_DAYS = 30;
 const LOGIN_SESSION_MS = LOGIN_SESSION_DAYS * DAY_MS;
 // A login session used within this long of its expiry is extended.
 const EXTEND_WITHIN_MS = 15 * DAY_MS;

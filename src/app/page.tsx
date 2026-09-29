@@ -13,7 +13,8 @@ async function startConversation() {
   redirect(`/c/${conversation.id}`);
 }
 
-export default function Home() {
+export default async function Home() {
+  await requireUser();
   return (
     <main className="m-auto flex flex-col items-center gap-6 p-4">
       <h1 className="font-display text-3xl font-semibold text-primary">
