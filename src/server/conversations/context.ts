@@ -9,6 +9,7 @@ export class ContextBudgetError extends Error {}
 export type BuiltContext = {
   messages: ModelMessage[];
   dropped: boolean;
+  systemPrompt?: string;
 };
 
 type TextMessage = {
@@ -85,11 +86,9 @@ export async function buildContext(
     remaining -= cost;
   }
 
-  const messages = await convertToModelMessages(selected);
   return {
-    messages: activeSystemPrompt
-      ? [{ role: "system", content: activeSystemPrompt }, ...messages]
-      : messages,
+    messages: await convertToModelMessages(selected),
     dropped: selected.length < textOnly.length,
+    systemPrompt: activeSystemPrompt,
   };
 }

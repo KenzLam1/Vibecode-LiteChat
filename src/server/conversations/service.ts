@@ -263,6 +263,7 @@ export function createConversationService({
     const result = streamText({
       ...modelFor(model),
       messages: context.messages,
+      system: context.systemPrompt,
       abortSignal: AbortSignal.any([idle.signal, stopped.signal]),
       onChunk: resetIdleTimer,
       // Failures are reported once, through the UI stream below.
