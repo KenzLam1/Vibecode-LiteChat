@@ -3,14 +3,14 @@ import { currentUser } from "@/server/current-user";
 import { logOut } from "../auth-actions";
 
 // The logged-in username and a Log out button. Renders nothing when logged
-// out. Mounted in the root layout for now; the sidebar will own it later.
+// out. The root layout places it in the conversation sidebar.
 export async function LogoutControl() {
   const user = await currentUser();
   if (!user) return null;
   return (
     <form
       action={logOut}
-      className="fixed top-3 right-4 z-10 flex items-center gap-2 text-sm"
+      className="flex items-center justify-between gap-2 text-sm"
     >
       <span className="text-gray-600">{user.username}</span>
       <button

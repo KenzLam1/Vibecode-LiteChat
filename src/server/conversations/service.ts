@@ -1,4 +1,4 @@
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, sql } from "drizzle-orm";
 import {
   readUIMessageStream,
   streamText,
@@ -15,6 +15,7 @@ import {
 } from "@/server/db/schema";
 
 import { buildContext } from "./context";
+import { applyAutomaticTitle, applyFallbackTitle } from "./titles";
 
 // The Conversation service: the one place that reads and writes
 // conversations. Every operation takes the current user and only ever sees
@@ -155,6 +156,7 @@ export function createConversationService({
   // finished; a reply that failed at any point saves nothing.
   async function saveWhenFinished(
     conversationId: string,
+    modelSettings: ModelSettings,
     stream: ReadableStream<ChatMessageChunk>,
   ) {
     let reply: ChatMessage | undefined;
@@ -175,6 +177,7 @@ export function createConversationService({
         role: "assistant",
         parts: reply.parts,
       });
+      await applyAutomaticTitle(db, conversationId, modelSettings);
     } catch (error) {
       console.error(`[conversations] saving a reply failed:`, error);
     }
@@ -205,9 +208,10 @@ export function createConversationService({
     };
 
     const context = await buildContext(history(conversation.id));
+    const modelSettings = modelFor(model);
     resetIdleTimer();
     const result = streamText({
-      ...modelFor(model),
+      ...modelSettings,
       messages: context,
       abortSignal: idle.signal,
       onChunk: resetIdleTimer,
@@ -242,11 +246,20 @@ export function createConversationService({
 
     return {
       stream: toBrowser,
-      done: saveWhenFinished(conversation.id, toServer),
+      done: saveWhenFinished(conversation.id, modelSettings, toServer),
     };
   }
 
   return {
+    async list(user: CurrentUser): Promise<Conversation[]> {
+      return db
+        .select()
+        .from(conversations)
+        .where(eq(conversations.userId, user.id))
+        .orderBy(desc(conversations.updatedAt), desc(conversations.createdAt))
+        .all();
+    },
+
     async start(user: CurrentUser, modelId: string): Promise<Conversation> {
       if (!findModel(modelId)) {
         throw new ConversationError("rejected", "That model isn't available.");
@@ -271,6 +284,35 @@ export function createConversationService({
       return { conversation, messages: history(conversation.id) };
     },
 
+    async rename(
+      user: CurrentUser,
+      id: string,
+      title: string,
+    ): Promise<Conversation> {
+      requireOwned(user, id);
+      const nextTitle = title.trim();
+      if (!nextTitle) {
+        throw new ConversationError("rejected", "Enter a conversation title.");
+      }
+      return db
+        .update(conversations)
+        .set({ title: nextTitle, titleSource: "user" })
+        .where(
+          and(eq(conversations.id, id), eq(conversations.userId, user.id)),
+        )
+        .returning()
+        .get();
+    },
+
+    async delete(user: CurrentUser, id: string): Promise<void> {
+      requireOwned(user, id);
+      db.delete(conversations)
+        .where(
+          and(eq(conversations.id, id), eq(conversations.userId, user.id)),
+        )
+        .run();
+    },
+
     // Saves the user's message before the model is called, then streams the
     // reply to it.
     async send(
@@ -288,6 +330,7 @@ export function createConversationService({
         role: "user",
         parts: [{ type: "text", text }],
       });
+      applyFallbackTitle(db, conversation.id, text);
       return streamReply(conversation, model);
     },
 

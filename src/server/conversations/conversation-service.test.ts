@@ -1,9 +1,10 @@
 import { MockLanguageModelV3, simulateReadableStream } from "ai/test";
+import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import type { CurrentUser } from "@/server/current-user";
 import { createDb, type Db } from "@/server/db";
-import { users } from "@/server/db/schema";
+import { conversations, messages, users } from "@/server/db/schema";
 
 import {
   ConversationError,
@@ -30,6 +31,15 @@ const usage = {
   inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
   outputTokens: { total: 1, text: 1, reasoning: 0 },
 };
+
+function generatedText(text: string) {
+  return {
+    content: [{ type: "text" as const, text }],
+    finishReason: { unified: "stop" as const, raw: "stop" },
+    usage,
+    warnings: [],
+  };
+}
 
 function chunksFor(script: Script): LanguageModelV3StreamPart[] {
   if ("failAfter" in script) {
@@ -103,6 +113,14 @@ function scriptedModel(...scripts: Script[]) {
   });
 }
 
+function titledModel(title: string, ...scripts: Script[]) {
+  const streaming = scriptedModel(...scripts);
+  return new MockLanguageModelV3({
+    doStream: (options) => streaming.doStream(options),
+    doGenerate: generatedText(title),
+  });
+}
+
 // Reads everything, like a browser that stays connected.
 async function drain<T>(stream: ReadableStream<T>): Promise<T[]> {
   const chunks: T[] = [];
@@ -164,6 +182,49 @@ describe("start and open", () => {
       modelId: "claude",
     });
     expect(opened?.messages).toEqual([]);
+  });
+});
+
+describe("list", () => {
+  it("lists only the user's conversations by newest activity", async () => {
+    const older = await service.start(alice, "claude");
+    await service.start(bob, "claude");
+    const newer = await service.start(alice, "gemini");
+
+    expect((await service.list(alice)).map(({ id }) => id)).toEqual([
+      newer.id,
+      older.id,
+    ]);
+  });
+});
+
+describe("rename", () => {
+  it("renames a conversation and keeps the new title", async () => {
+    const conversation = await service.start(alice, "claude");
+
+    await service.rename(alice, conversation.id, "Research notes");
+
+    expect((await service.open(alice, conversation.id))?.conversation).toMatchObject(
+      {
+        title: "Research notes",
+        titleSource: "user",
+      },
+    );
+  });
+});
+
+describe("delete", () => {
+  it("deletes a conversation and cascades to its messages", async () => {
+    useModel(scriptedModel({ reply: "Hello!" }));
+    const conversation = await service.start(alice, "claude");
+    const reply = await service.send(alice, conversation.id, { text: "Hi" });
+    await drain(reply.stream);
+    await reply.done;
+
+    await service.delete(alice, conversation.id);
+
+    expect(await service.open(alice, conversation.id)).toBeNull();
+    expect(db.select().from(messages).all()).toEqual([]);
   });
 });
 
@@ -365,6 +426,137 @@ describe("regenerate", () => {
   });
 });
 
+describe("retired models", () => {
+  it("opens a retired-model conversation read-only", async () => {
+    const conversation = await service.start(alice, "claude");
+    db.update(conversations)
+      .set({ modelId: "retired-model" })
+      .where(eq(conversations.id, conversation.id))
+      .run();
+
+    expect((await service.open(alice, conversation.id))?.conversation.modelId).toBe(
+      "retired-model",
+    );
+    await expect(
+      service.send(alice, conversation.id, { text: "Can you still answer?" }),
+    ).rejects.toMatchObject({ reason: "rejected" });
+    expect(model.doStreamCalls).toHaveLength(0);
+  });
+});
+
+describe("titles", () => {
+  it("sets a fallback title from the first message immediately", async () => {
+    useModel(scriptedModel({ failBeforeFirstToken: true }));
+    const conversation = await service.start(alice, "claude");
+
+    const reply = await service.send(alice, conversation.id, {
+      text: "123456789012345678901234567890123456789012345",
+    });
+
+    expect((await service.open(alice, conversation.id))?.conversation).toMatchObject(
+      {
+        title: "123456789012345678901234567890123456789…",
+        titleSource: "fallback",
+      },
+    );
+    await drain(reply.stream);
+    await reply.done;
+  });
+
+  it("replaces the fallback with an AI title after the first reply", async () => {
+    useModel(titledModel("How Plants Make Energy", { reply: "With sunlight." }));
+    const conversation = await service.start(alice, "claude");
+
+    const reply = await service.send(alice, conversation.id, {
+      text: "How does photosynthesis work?",
+    });
+    await drain(reply.stream);
+    await reply.done;
+
+    expect((await service.open(alice, conversation.id))?.conversation).toMatchObject(
+      {
+        title: "How Plants Make Energy",
+        titleSource: "auto",
+      },
+    );
+    expect(model.doGenerateCalls[0].maxOutputTokens).toBeGreaterThanOrEqual(800);
+  });
+
+  it("keeps the fallback when the title call fails", async () => {
+    useModel(scriptedModel({ reply: "Answer one." }));
+    const conversation = await service.start(alice, "claude");
+    const reply = await service.send(alice, conversation.id, {
+      text: "Keep this fallback",
+    });
+    await drain(reply.stream);
+    await reply.done;
+
+    expect((await service.open(alice, conversation.id))?.conversation).toMatchObject(
+      {
+        title: "Keep this fallback",
+        titleSource: "fallback",
+      },
+    );
+  });
+
+  it("keeps the fallback when the title call returns empty", async () => {
+    useModel(titledModel("   ", { reply: "Answer two." }));
+    const conversation = await service.start(alice, "claude");
+    const reply = await service.send(alice, conversation.id, {
+      text: "Keep this fallback",
+    });
+    await drain(reply.stream);
+    await reply.done;
+
+    expect((await service.open(alice, conversation.id))?.conversation).toMatchObject(
+      {
+        title: "Keep this fallback",
+        titleSource: "fallback",
+      },
+    );
+  });
+
+  it("never replaces a user rename, including while a title is in flight", async () => {
+    let titleStarted!: () => void;
+    let finishTitle!: (value: ReturnType<typeof generatedText>) => void;
+    const started = new Promise<void>((resolve) => {
+      titleStarted = resolve;
+    });
+    const titleResult = new Promise<ReturnType<typeof generatedText>>(
+      (resolve) => {
+        finishTitle = resolve;
+      },
+    );
+    const streaming = scriptedModel({ reply: "A finished answer." });
+    useModel(
+      new MockLanguageModelV3({
+        doStream: (options) => streaming.doStream(options),
+        doGenerate: async () => {
+          titleStarted();
+          return titleResult;
+        },
+      }),
+    );
+    const conversation = await service.start(alice, "claude");
+    const reply = await service.send(alice, conversation.id, {
+      text: "A title-worthy question",
+    });
+    await drain(reply.stream);
+    await started;
+
+    await service.rename(alice, conversation.id, "My chosen title");
+    finishTitle(generatedText("Late automatic title"));
+    await reply.done;
+
+    expect((await service.open(alice, conversation.id))?.conversation).toMatchObject(
+      {
+        title: "My chosen title",
+        titleSource: "user",
+      },
+    );
+  });
+});
+
 describe("ownership", () => {
   it("does not open another user's conversation", async () => {
     const { id } = await service.start(alice, "claude");
@@ -395,6 +587,21 @@ describe("ownership", () => {
       reason: "not-found",
     });
     expect(model.doStreamCalls).toHaveLength(1);
+  });
+
+  it("does not rename or delete another user's conversation", async () => {
+    const conversation = await service.start(alice, "claude");
+
+    await expect(
+      service.rename(bob, conversation.id, "Taken over"),
+    ).rejects.toMatchObject({ reason: "not-found" });
+    await expect(service.delete(bob, conversation.id)).rejects.toMatchObject({
+      reason: "not-found",
+    });
+
+    expect((await service.open(alice, conversation.id))?.conversation.title).toBe(
+      "New conversation",
+    );
   });
 
   it("treats an unknown id as not found", async () => {
