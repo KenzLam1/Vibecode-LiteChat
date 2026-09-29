@@ -11,6 +11,7 @@ import type { Db } from "@/server/db";
 import {
   conversations,
   messages,
+  users,
   type ChatMessage,
 } from "@/server/db/schema";
 
@@ -117,6 +118,16 @@ export function createConversationService({
     return conversation;
   }
 
+  function currentSystemPrompt(user: CurrentUser): string | null {
+    return (
+      db
+        .select({ systemPrompt: users.systemPrompt })
+        .from(users)
+        .where(eq(users.id, user.id))
+        .get()?.systemPrompt ?? null
+    );
+  }
+
   // Retired models are derived from the catalog, never stored.
   function requireLiveModel(conversation: Conversation): CatalogModel {
     const model = findModel(conversation.modelId);
@@ -196,6 +207,7 @@ export function createConversationService({
   }
 
   async function streamReply(
+    user: CurrentUser,
     conversation: Conversation,
     model: CatalogModel,
     preparedContext?: BuiltContext,
@@ -227,6 +239,7 @@ export function createConversationService({
       preparedContext ??
       (await buildContext(history(conversation.id), {
         tokenBudget: contextTokenBudget,
+        systemPrompt: currentSystemPrompt(user),
       }));
     resetIdleTimer();
     const result = streamText({
@@ -366,7 +379,10 @@ export function createConversationService({
       try {
         context = await buildContext(
           [...history(conversation.id), userMessage],
-          { tokenBudget: contextTokenBudget },
+          {
+            tokenBudget: contextTokenBudget,
+            systemPrompt: currentSystemPrompt(user),
+          },
         );
       } catch (error) {
         if (error instanceof ContextBudgetError) {
@@ -375,7 +391,7 @@ export function createConversationService({
         throw error;
       }
       saveMessage(conversation.id, userMessage);
-      return streamReply(conversation, model, context);
+      return streamReply(user, conversation, model, context);
     },
 
     // Streams a new reply to the saved, unanswered last user message.
@@ -389,7 +405,7 @@ export function createConversationService({
           "There is no unanswered message to try again.",
         );
       }
-      return streamReply(conversation, model);
+      return streamReply(user, conversation, model);
     },
   };
 }

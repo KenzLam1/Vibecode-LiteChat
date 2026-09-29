@@ -1,4 +1,5 @@
 import { MockLanguageModelV3, simulateReadableStream } from "ai/test";
+import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import type { CurrentUser } from "@/server/current-user";
@@ -503,6 +504,27 @@ describe("send", () => {
       { role: "assistant", content: [{ type: "text", text: "First answer" }] },
       { role: "user", content: [{ type: "text", text: "Second question" }] },
     ]);
+  });
+
+  it("uses the user's current system prompt on the next turn", async () => {
+    useModel(scriptedModel({ reply: "First answer" }, { reply: "Bonjour" }));
+    const { id } = await service.start(alice, "claude");
+    const first = await service.send(alice, id, { text: "First question" });
+    await drain(first.stream);
+    await first.done;
+
+    db.update(users)
+      .set({ systemPrompt: "Always answer in French" })
+      .where(eq(users.id, alice.id))
+      .run();
+    const second = await service.send(alice, id, { text: "Second question" });
+    await drain(second.stream);
+    await second.done;
+
+    expect(model.doStreamCalls[1].prompt[0]).toEqual({
+      role: "system",
+      content: "Always answer in French",
+    });
   });
 
   it("bumps the conversation's updated_at for every saved message", async () => {

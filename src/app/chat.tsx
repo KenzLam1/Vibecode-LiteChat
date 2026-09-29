@@ -2,6 +2,7 @@
 
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type FileUIPart } from "ai";
+import Link from "next/link";
 
 import type { CatalogModel } from "@/lib/models";
 import type { ChatMessage } from "@/server/db/schema";
@@ -89,10 +90,13 @@ export function Chat({
   return (
     <div className="flex h-dvh w-full flex-col">
       <header className="border-b border-gray-200 bg-white">
-        <div className="mx-auto flex w-full max-w-3xl items-center px-4 py-3">
+        <div className="mx-auto flex w-full max-w-3xl items-center justify-between px-4 py-3">
           <h1 className="font-display text-2xl font-semibold text-primary">
             LiteChat
           </h1>
+          <Link href="/profile" className="text-sm font-medium text-primary hover:underline">
+            Profile
+          </Link>
         </div>
       </header>
 

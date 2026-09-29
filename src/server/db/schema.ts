@@ -8,6 +8,10 @@ import {
 } from "drizzle-orm/sqlite-core";
 import type { UIMessage } from "ai";
 
+import { SYSTEM_PROMPT_MAX_CHARS } from "@/lib/limits";
+
+export { SYSTEM_PROMPT_MAX_CHARS } from "@/lib/limits";
+
 // IDs are random text, never sequential integers.
 const id = () =>
   text("id")
@@ -18,8 +22,6 @@ const createdAt = () =>
   integer("created_at", { mode: "timestamp_ms" })
     .notNull()
     .$defaultFn(() => new Date());
-
-export const SYSTEM_PROMPT_MAX_CHARS = 4000;
 
 export const users = sqliteTable(
   "users",

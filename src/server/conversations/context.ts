@@ -24,6 +24,10 @@ function estimatedTokens(message: TextMessage): number {
   );
 }
 
+function estimatedTextTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
 // The context builder: what the model sees on a turn, built from the saved
 // conversation (oldest first, ending with the message being answered).
 //
@@ -36,7 +40,10 @@ function estimatedTokens(message: TextMessage): number {
 // system prompt will go first (ticket 10).
 export async function buildContext(
   history: ChatMessage[],
-  { tokenBudget = CONTEXT_TOKEN_BUDGET }: { tokenBudget?: number } = {},
+  {
+    tokenBudget = CONTEXT_TOKEN_BUDGET,
+    systemPrompt,
+  }: { tokenBudget?: number; systemPrompt?: string | null } = {},
 ): Promise<BuiltContext> {
   const textOnly: TextMessage[] = history.flatMap((message) => {
     const parts = message.parts.flatMap((part) => {
@@ -64,7 +71,11 @@ export async function buildContext(
     );
   }
 
-  let remaining = tokenBudget - estimatedTokens(newest);
+  const activeSystemPrompt = systemPrompt?.trim() ? systemPrompt : undefined;
+  let remaining =
+    tokenBudget -
+    estimatedTokens(newest) -
+    (activeSystemPrompt ? estimatedTextTokens(activeSystemPrompt) : 0);
   const selected = [newest];
   const earlier = textOnly.slice(0, -1);
   for (let index = earlier.length - 1; index >= 0; index -= 1) {
@@ -74,8 +85,11 @@ export async function buildContext(
     remaining -= cost;
   }
 
+  const messages = await convertToModelMessages(selected);
   return {
-    messages: await convertToModelMessages(selected),
+    messages: activeSystemPrompt
+      ? [{ role: "system", content: activeSystemPrompt }, ...messages]
+      : messages,
     dropped: selected.length < textOnly.length,
   };
 }
