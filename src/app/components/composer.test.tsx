@@ -10,10 +10,18 @@ afterEach(cleanup);
 
 function renderComposer(busy = false) {
   const onSend = vi.fn();
-  render(<Composer model={models[0]} busy={busy} onSend={onSend} />);
+  const onStop = vi.fn();
+  render(
+    <Composer
+      model={models[0]}
+      busy={busy}
+      onSend={onSend}
+      onStop={onStop}
+    />,
+  );
   const box = screen.getByRole("textbox", { name: "Message" });
   fireEvent.change(box, { target: { value: "hello" } });
-  return { onSend, box };
+  return { onSend, onStop, box };
 }
 
 describe("Composer", () => {
@@ -37,16 +45,14 @@ describe("Composer", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
-  it("can't send while a reply is in flight", () => {
-    const { onSend, box } = renderComposer(true);
+  it("shows Stop and can't send while a reply is in flight", () => {
+    const { onSend, onStop, box } = renderComposer(true);
 
     fireEvent.keyDown(box, { key: "Enter" });
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
 
     expect(onSend).not.toHaveBeenCalled();
-    expect(
-      (screen.getByRole("button", { name: "Send" }) as HTMLButtonElement)
-        .disabled,
-    ).toBe(true);
+    expect(onStop).toHaveBeenCalledOnce();
     // What was typed is kept for when the reply finishes.
     expect((box as HTMLTextAreaElement).value).toBe("hello");
   });

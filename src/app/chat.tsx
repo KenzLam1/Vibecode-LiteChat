@@ -3,6 +3,7 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type FileUIPart } from "ai";
 import Link from "next/link";
+import { useState } from "react";
 
 import type { CatalogModel } from "@/lib/models";
 import type { ChatMessage } from "@/server/db/schema";
@@ -63,11 +64,14 @@ export function Chat({
   conversationId,
   model,
   initialMessages,
+  initialReplyInProgress,
 }: {
   conversationId: string;
   model: CatalogModel;
   initialMessages: ChatMessage[];
+  initialReplyInProgress: boolean;
 }) {
+  const [stopError, setStopError] = useState<string>();
   const { messages, sendMessage, regenerate, status, error } =
     useChat<ChatMessage>({
       id: conversationId,
@@ -85,7 +89,20 @@ export function Chat({
       (hasAnswer(lastMessage) || hasReasoning(lastMessage))
     );
   // A reopened conversation whose last message never got an answer.
-  const unanswered = status === "ready" && lastMessage?.role === "user";
+  const unanswered =
+    status === "ready" &&
+    lastMessage?.role === "user" &&
+    !initialReplyInProgress;
+
+  async function stopReply() {
+    setStopError(undefined);
+    const response = await fetch("/api/chat/stop", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ conversationId }),
+    });
+    if (!response.ok) setStopError(await response.text());
+  }
 
   return (
     <div className="flex h-dvh w-full flex-col">
@@ -120,6 +137,11 @@ export function Chat({
               <TryAgainButton onClick={() => void regenerate()} />
             </div>
           )}
+          {initialReplyInProgress && status === "ready" && (
+            <p className="text-sm text-gray-500" role="status">
+              The reply is still finishing. Refresh in a moment.
+            </p>
+          )}
           {error && !busy && (
             <ReplyError error={error} onRetry={() => void regenerate()} />
           )}
@@ -130,7 +152,8 @@ export function Chat({
         <Composer
           model={model}
           busy={busy}
-          error={error?.message}
+          error={stopError ?? error?.message}
+          onStop={() => void stopReply()}
           onSend={async (text, files) => {
             await sendMessage({
               text,

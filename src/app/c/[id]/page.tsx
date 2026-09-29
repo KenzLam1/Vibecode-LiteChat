@@ -26,6 +26,7 @@ export default async function ConversationPage({
       conversationId={id}
       model={model}
       initialMessages={opened.messages}
+      initialReplyInProgress={opened.replyInProgress}
     />
   );
 }

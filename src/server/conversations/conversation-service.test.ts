@@ -592,6 +592,59 @@ describe("regenerate", () => {
   });
 });
 
+describe("stop", () => {
+  it("saves the partial answer and allows the next message", async () => {
+    useModel(
+      scriptedModel({ stallAfter: "Partial answer" }, { reply: "Next answer" }),
+    );
+    const { id } = await service.start(alice, "claude");
+
+    const first = await service.send(alice, id, { text: "First question" });
+    const browserDrain = drain(first.stream);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await service.stop(alice, id);
+    await browserDrain;
+    await first.done;
+
+    const afterStop = await service.open(alice, id);
+    expect(afterStop?.messages.map((message) => [message.role, textOf(message)])).toEqual([
+      ["user", "First question"],
+      ["assistant", "Partial answer"],
+    ]);
+
+    const second = await service.send(alice, id, { text: "Second question" });
+    await drain(second.stream);
+    await second.done;
+    expect((await service.open(alice, id))?.messages.map(textOf)).toEqual([
+      "First question",
+      "Partial answer",
+      "Second question",
+      "Next answer",
+    ]);
+  });
+
+  it("does not start a second reply after reopening mid-stream", async () => {
+    useModel(scriptedModel({ stallAfter: "Still working" }, { reply: "Duplicate" }));
+    const { id } = await service.start(alice, "claude");
+
+    const first = await service.send(alice, id, { text: "Question" });
+    const browserDrain = drain(first.stream);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    expect((await service.open(alice, id))?.replyInProgress).toBe(true);
+    await expect(service.regenerate(alice, id)).rejects.toMatchObject({
+      reason: "rejected",
+      message: "A reply is already in progress for this conversation.",
+    });
+    expect(model.doStreamCalls).toHaveLength(1);
+
+    await service.stop(alice, id);
+    await browserDrain;
+    await first.done;
+    expect((await service.open(alice, id))?.replyInProgress).toBe(false);
+  });
+});
+
 describe("ownership", () => {
   it("does not open another user's conversation", async () => {
     const { id } = await service.start(alice, "claude");

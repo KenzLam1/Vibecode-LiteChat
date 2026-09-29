@@ -11,6 +11,7 @@ import {
   createConversationService,
   type ConversationService,
 } from "./service";
+import { activeReplyRegistry } from "./active-replies";
 
 export {
   ConversationError,
@@ -26,6 +27,7 @@ let service: ConversationService | undefined;
 export function conversationService(): ConversationService {
   service ??= createConversationService({
     db: getDb(),
+    activeReplies: activeReplyRegistry,
     modelFor: (model) => ({
       ...modelCall(model),
       maxOutputTokens: REPLY_MAX_OUTPUT_TOKENS,

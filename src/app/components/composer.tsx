@@ -11,11 +11,13 @@ export function Composer({
   busy,
   error,
   onSend,
+  onStop,
 }: {
   model: CatalogModel;
   busy: boolean;
   error?: string;
   onSend: (text: string, attachments: File[]) => void | Promise<void>;
+  onStop: () => void;
 }) {
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<File[]>([]);
@@ -155,19 +157,24 @@ export function Composer({
           </>
         )}
         <button
-          type="submit"
-          aria-label="Send"
-          disabled={!canSend}
+          type={busy ? "button" : "submit"}
+          aria-label={busy ? "Stop" : "Send"}
+          disabled={!busy && !canSend}
           className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary text-white hover:bg-primary/90 disabled:opacity-40"
+          onClick={busy ? onStop : undefined}
         >
-          <svg
-            aria-hidden
-            viewBox="0 0 20 20"
-            fill="currentColor"
-            className="size-4"
-          >
-            <path d="M2.6 2.2a.75.75 0 0 1 .82-.1l14 7.25a.75.75 0 0 1 0 1.33l-14 7.25a.75.75 0 0 1-1.05-.9L4.6 10 2.37 3.07a.75.75 0 0 1 .23-.86ZM6 10.75l-1.6 4.9L14.9 10 4.4 4.35 6 9.25h4.25a.75.75 0 0 1 0 1.5H6Z" />
-          </svg>
+          {busy ? (
+            <span aria-hidden className="size-3 rounded-sm bg-current" />
+          ) : (
+            <svg
+              aria-hidden
+              viewBox="0 0 20 20"
+              fill="currentColor"
+              className="size-4"
+            >
+              <path d="M2.6 2.2a.75.75 0 0 1 .82-.1l14 7.25a.75.75 0 0 1 0 1.33l-14 7.25a.75.75 0 0 1-1.05-.9L4.6 10 2.37 3.07a.75.75 0 0 1 .23-.86ZM6 10.75l-1.6 4.9L14.9 10 4.4 4.35 6 9.25h4.25a.75.75 0 0 1 0 1.5H6Z" />
+            </svg>
+          )}
         </button>
       </form>
     </div>

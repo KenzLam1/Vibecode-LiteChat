@@ -38,6 +38,7 @@ export type Conversation = typeof conversations.$inferSelect;
 export type OpenConversation = {
   conversation: Conversation;
   messages: ChatMessage[];
+  replyInProgress: boolean;
 };
 
 export type ChatMessageChunk = InferUIMessageChunk<ChatMessage>;
@@ -83,7 +84,13 @@ export type ConversationServiceDeps = {
   // failed. Injected so tests don't wait.
   replyIdleTimeoutMs?: number;
   contextTokenBudget?: number;
+  activeReplies?: ActiveReplyRegistry;
 };
+
+export type ActiveReplyRegistry = Map<
+  string,
+  { controller: AbortController; done: Promise<void> }
+>;
 
 export type ConversationService = ReturnType<typeof createConversationService>;
 
@@ -101,6 +108,7 @@ export function createConversationService({
   onReplyError,
   replyIdleTimeoutMs = REPLY_IDLE_TIMEOUT_MS,
   contextTokenBudget = CONTEXT_TOKEN_BUDGET,
+  activeReplies = new Map(),
 }: ConversationServiceDeps) {
   function findOwned(user: CurrentUser, id: string): Conversation | undefined {
     return db
@@ -138,6 +146,15 @@ export function createConversationService({
       );
     }
     return model;
+  }
+
+  function requireNoActiveReply(conversationId: string) {
+    if (activeReplies.has(conversationId)) {
+      throw new ConversationError(
+        "rejected",
+        "A reply is already in progress for this conversation.",
+      );
+    }
   }
 
   function history(conversationId: string): ChatMessage[] {
@@ -220,6 +237,7 @@ export function createConversationService({
     // Aborts the model call when nothing has arrived for a while, before the
     // first token or between tokens.
     const idle = new AbortController();
+    const stopped = new AbortController();
     let idleTimer: ReturnType<typeof setTimeout> | undefined;
     const resetIdleTimer = () => {
       clearTimeout(idleTimer);
@@ -245,7 +263,7 @@ export function createConversationService({
     const result = streamText({
       ...modelFor(model),
       messages: context.messages,
-      abortSignal: idle.signal,
+      abortSignal: AbortSignal.any([idle.signal, stopped.signal]),
       onChunk: resetIdleTimer,
       // Failures are reported once, through the UI stream below.
       onError: () => {},
@@ -310,9 +328,21 @@ export function createConversationService({
       )
       .tee();
 
+    const active = {
+      controller: stopped,
+      done: Promise.resolve(),
+    };
+    activeReplies.set(conversation.id, active);
+    const done = saveWhenFinished(conversation.id, toServer).finally(() => {
+      if (activeReplies.get(conversation.id) === active) {
+        activeReplies.delete(conversation.id);
+      }
+    });
+    active.done = done;
+
     return {
       stream: toBrowser,
-      done: saveWhenFinished(conversation.id, toServer),
+      done,
       droppedContext: context.dropped,
     };
   }
@@ -339,7 +369,11 @@ export function createConversationService({
     async open(user: CurrentUser, id: string): Promise<OpenConversation | null> {
       const conversation = findOwned(user, id);
       if (!conversation) return null;
-      return { conversation, messages: history(conversation.id) };
+      return {
+        conversation,
+        messages: history(conversation.id),
+        replyInProgress: activeReplies.has(conversation.id),
+      };
     },
 
     // Saves the user's message before the model is called, then streams the
@@ -351,6 +385,7 @@ export function createConversationService({
     ): Promise<Reply> {
       const conversation = requireOwned(user, id);
       const model = requireLiveModel(conversation);
+      requireNoActiveReply(conversation.id);
       const text = input.text.trim();
       if (!text && !input.attachments?.length) {
         throw new ConversationError("rejected", "Type a message to send.");
@@ -398,6 +433,7 @@ export function createConversationService({
     async regenerate(user: CurrentUser, id: string): Promise<Reply> {
       const conversation = requireOwned(user, id);
       const model = requireLiveModel(conversation);
+      requireNoActiveReply(conversation.id);
       const last = history(conversation.id).at(-1);
       if (last?.role !== "user") {
         throw new ConversationError(
@@ -406,6 +442,16 @@ export function createConversationService({
         );
       }
       return streamReply(user, conversation, model);
+    },
+
+    async stop(user: CurrentUser, id: string): Promise<void> {
+      const conversation = requireOwned(user, id);
+      const active = activeReplies.get(conversation.id);
+      if (!active) {
+        throw new ConversationError("rejected", "There is no reply to stop.");
+      }
+      active.controller.abort(new DOMException("Reply stopped", "AbortError"));
+      await active.done;
     },
   };
 }
