@@ -11,6 +11,7 @@ import {
   renameConversation,
 } from "../conversation-actions";
 import { NewConversationButton } from "./new-conversation";
+import { useToast } from "./toast";
 
 const dateFormatter = new Intl.DateTimeFormat("en-US", {
   month: "short",
@@ -24,14 +25,13 @@ export function ConversationSidebar({
 }) {
   const pathname = usePathname();
   const router = useRouter();
+  const toast = useToast();
   const [renamingId, setRenamingId] = useState<string>();
   const [renameTitle, setRenameTitle] = useState("");
   const [deleting, setDeleting] = useState<Conversation>();
-  const [error, setError] = useState<string>();
   const [pending, startTransition] = useTransition();
 
   function beginRename(conversation: Conversation) {
-    setError(undefined);
     setRenamingId(conversation.id);
     setRenameTitle(conversation.title);
   }
@@ -44,7 +44,7 @@ export function ConversationSidebar({
     startTransition(async () => {
       const result = await renameConversation(id, title);
       if (!result.ok) {
-        setError(result.error);
+        toast(result.error);
         return;
       }
       setRenamingId(undefined);
@@ -58,7 +58,7 @@ export function ConversationSidebar({
     startTransition(async () => {
       const result = await deleteConversation(conversation.id);
       if (!result.ok) {
-        setError(result.error);
+        toast(result.error);
         setDeleting(undefined);
         return;
       }
@@ -147,10 +147,7 @@ export function ConversationSidebar({
                           <button
                             type="button"
                             aria-label={`Delete ${conversation.title}`}
-                            onClick={() => {
-                              setError(undefined);
-                              setDeleting(conversation);
-                            }}
+                            onClick={() => setDeleting(conversation)}
                             className="rounded p-1.5 text-gray-500 hover:bg-white hover:text-red-600"
                           >
                             <span aria-hidden>×</span>
@@ -165,11 +162,6 @@ export function ConversationSidebar({
           )}
         </nav>
 
-        {error && (
-          <p role="alert" className="m-3 rounded-lg bg-red-50 p-2 text-sm text-red-700">
-            {error}
-          </p>
-        )}
       </aside>
 
       {deleting && (

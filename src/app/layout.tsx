@@ -5,6 +5,7 @@ import { conversationService } from "@/server/conversations";
 import { requireUser } from "@/server/current-user";
 
 import { ConversationSidebar } from "./components/conversation-sidebar";
+import { ToastProvider } from "./components/toast";
 import "./globals.css";
 
 const inter = Inter({
@@ -32,10 +33,12 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
       className={`${inter.variable} ${fredoka.variable} h-full antialiased`}
     >
       <body className="min-h-full">
-        <div className="flex min-h-dvh">
-          <ConversationSidebar initialConversations={conversations} />
-          <div className="min-w-0 flex-1">{children}</div>
-        </div>
+        <ToastProvider>
+          <div className="flex min-h-dvh">
+            <ConversationSidebar initialConversations={conversations} />
+            <div className="min-w-0 flex-1">{children}</div>
+          </div>
+        </ToastProvider>
       </body>
     </html>
   );

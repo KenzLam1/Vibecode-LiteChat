@@ -3,7 +3,7 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { CatalogModel } from "@/lib/models";
 import type { ChatMessage } from "@/server/db/schema";
@@ -50,6 +50,9 @@ export function Chat({
       transport,
     });
   const previousStatus = useRef(status);
+  const messageList = useRef<HTMLElement>(null);
+  const followLatest = useRef(true);
+  const [following, setFollowing] = useState(true);
   useEffect(() => {
     if (
       previousStatus.current !== status &&
@@ -59,6 +62,10 @@ export function Chat({
     }
     previousStatus.current = status;
   }, [router, status]);
+  useLayoutEffect(() => {
+    if (!followLatest.current || !messageList.current) return;
+    messageList.current.scrollTo({ top: messageList.current.scrollHeight });
+  }, [messages, status]);
   const busy = status === "submitted" || status === "streaming";
   const lastMessage = messages.at(-1);
   // The timer runs from the request until the first answer token; reasoning
@@ -70,31 +77,63 @@ export function Chat({
 
   return (
     <div className="flex h-dvh w-full flex-col">
-      <main className="flex-1 overflow-y-auto">
-        <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 py-6">
-          {messages.length === 0 && (
-            <p className="mt-24 text-center text-gray-500">
-              Send a message to start chatting with {model.displayName}.
-            </p>
-          )}
-          {messages.map((message) => (
-            <MessageBubble key={message.id} message={message} />
-          ))}
-          {thinking && (
-            <AssistantBubble>
-              <ThinkingTimer />
-            </AssistantBubble>
-          )}
-          {unanswered && (
-            <div>
-              <TryAgainButton onClick={() => void regenerate()} />
-            </div>
-          )}
-          {error && !busy && (
-            <ReplyError error={error} onRetry={() => void regenerate()} />
-          )}
-        </div>
-      </main>
+      <div className="relative min-h-0 flex-1">
+        <main
+          ref={messageList}
+          onScroll={(event) => {
+            const element = event.currentTarget;
+            const atBottom =
+              element.scrollHeight - element.scrollTop - element.clientHeight < 48;
+            if (atBottom !== followLatest.current) {
+              followLatest.current = atBottom;
+              setFollowing(atBottom);
+            }
+          }}
+          className="h-full overflow-y-auto"
+        >
+          <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 py-6">
+            {messages.length === 0 && (
+              <p className="mt-24 text-center text-gray-500">
+                Send a message to start chatting with {model.displayName}.
+              </p>
+            )}
+            {messages.map((message) => (
+              <MessageBubble key={message.id} message={message} />
+            ))}
+            {thinking && (
+              <AssistantBubble>
+                <ThinkingTimer />
+              </AssistantBubble>
+            )}
+            {unanswered && (
+              <div>
+                <TryAgainButton onClick={() => void regenerate()} />
+              </div>
+            )}
+            {error && !busy && (
+              <ReplyError error={error} onRetry={() => void regenerate()} />
+            )}
+          </div>
+        </main>
+
+        {!following && (
+          <button
+            type="button"
+            aria-label="Scroll to latest message"
+            onClick={() => {
+              followLatest.current = true;
+              setFollowing(true);
+              messageList.current?.scrollTo({
+                top: messageList.current.scrollHeight,
+                behavior: "smooth",
+              });
+            }}
+            className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-primary shadow-lg hover:bg-gray-50"
+          >
+            ↓ Latest
+          </button>
+        )}
+      </div>
 
       <footer className="mx-auto w-full max-w-3xl px-4 pb-4">
         <Composer
