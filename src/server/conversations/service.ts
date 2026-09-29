@@ -201,6 +201,9 @@ export function createConversationService({
     preparedContext?: BuiltContext,
   ): Promise<Reply> {
     const failedText = `${model.displayName} didn't answer. Please try again.`;
+    const reasoningStartedAt = performance.now();
+    let sawReasoning = false;
+    let reasoningFinished = false;
 
     // Aborts the model call when nothing has arrived for a while, before the
     // first token or between tokens.
@@ -255,6 +258,32 @@ export function createConversationService({
                 data: { dropped: true },
               });
               return;
+            }
+            if (
+              chunk.type === "reasoning-delta" &&
+              /\S/.test(chunk.delta)
+            ) {
+              sawReasoning = true;
+            }
+            const answerStarted =
+              chunk.type === "text-delta" && /\S/.test(chunk.delta);
+            const replyEnded =
+              chunk.type === "finish" ||
+              chunk.type === "abort" ||
+              chunk.type === "error";
+            if (
+              sawReasoning &&
+              !reasoningFinished &&
+              (answerStarted || replyEnded)
+            ) {
+              reasoningFinished = true;
+              controller.enqueue({
+                type: "data-reasoning",
+                data: {
+                  durationMs: Math.round(performance.now() - reasoningStartedAt),
+                  finished: true,
+                },
+              });
             }
             if (chunk.type === "abort" && idle.signal.aborted) {
               onReplyError?.(idle.signal.reason, model);

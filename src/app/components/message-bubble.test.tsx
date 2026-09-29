@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { ChatMessage } from "@/server/db/schema";
@@ -56,5 +56,44 @@ describe("MessageBubble context note", () => {
         "Older messages are no longer included in the model's context.",
       ),
     ).toBeTruthy();
+  });
+});
+
+describe("MessageBubble reasoning", () => {
+  it("shows live reasoning in an open block", () => {
+    const message: ChatMessage = {
+      id: "message-3",
+      role: "assistant",
+      parts: [{ type: "reasoning", text: "Working through it", state: "streaming" }],
+    };
+
+    render(<MessageBubble message={message} />);
+
+    expect(screen.getByText("Working through it")).toBeTruthy();
+    const summary = screen.getByText(/Thinking…/);
+    expect((summary.closest("details") as HTMLDetailsElement).open).toBe(true);
+  });
+
+  it("collapses completed reasoning and keeps it expandable", () => {
+    const message: ChatMessage = {
+      id: "message-4",
+      role: "assistant",
+      parts: [
+        { type: "reasoning", text: "Worked through it", state: "done" },
+        {
+          type: "data-reasoning",
+          data: { durationMs: 1_240, finished: true },
+        },
+        { type: "text", text: "The answer." },
+      ],
+    };
+
+    render(<MessageBubble message={message} />);
+
+    const summary = screen.getByText("Thought for 1.2s");
+    const details = summary.closest("details") as HTMLDetailsElement;
+    expect(details.open).toBe(false);
+    fireEvent.click(summary);
+    expect(details.open).toBe(true);
   });
 });

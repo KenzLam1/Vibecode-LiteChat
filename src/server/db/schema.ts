@@ -88,9 +88,14 @@ export type AttachmentData = {
   truncated: boolean;
 };
 export type ContextData = { dropped: true };
+export type ReasoningData = { durationMs: number; finished: true };
 export type ChatMessage = UIMessage<
   never,
-  { attachment: AttachmentData; context: ContextData }
+  {
+    attachment: AttachmentData;
+    context: ContextData;
+    reasoning: ReasoningData;
+  }
 >;
 
 export const messages = sqliteTable(

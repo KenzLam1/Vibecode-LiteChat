@@ -11,6 +11,7 @@ import {
   AssistantBubble,
   MessageBubble,
   hasAnswer,
+  hasReasoning,
 } from "./components/message-bubble";
 import { ReplyError } from "./components/reply-error";
 import { ThinkingTimer } from "./components/thinking-timer";
@@ -77,7 +78,11 @@ export function Chat({
   // The timer runs from the request until the first answer token; reasoning
   // arriving first doesn't stop it.
   const thinking =
-    busy && !(lastMessage?.role === "assistant" && hasAnswer(lastMessage));
+    busy &&
+    !(
+      lastMessage?.role === "assistant" &&
+      (hasAnswer(lastMessage) || hasReasoning(lastMessage))
+    );
   // A reopened conversation whose last message never got an answer.
   const unanswered = status === "ready" && lastMessage?.role === "user";
 

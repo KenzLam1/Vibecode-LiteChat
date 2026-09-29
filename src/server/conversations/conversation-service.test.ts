@@ -405,6 +405,13 @@ describe("send", () => {
     expect(messages[1].parts).toContainEqual(
       expect.objectContaining({ type: "reasoning", text: "They said hi." }),
     );
+    expect(messages[1].parts).toContainEqual({
+      type: "data-reasoning",
+      data: {
+        durationMs: expect.any(Number),
+        finished: true,
+      },
+    });
   });
 
   it("keeps the user message but saves nothing when the reply fails before the first token", async () => {
