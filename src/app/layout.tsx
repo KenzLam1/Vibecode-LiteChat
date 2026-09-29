@@ -2,9 +2,10 @@ import type { Metadata } from "next";
 import { Fredoka, Inter } from "next/font/google";
 
 import { conversationService } from "@/server/conversations";
-import { requireUser } from "@/server/current-user";
+import { currentUser } from "@/server/current-user";
 
 import { ConversationSidebar } from "./components/conversation-sidebar";
+import { LogoutControl } from "./components/logout-control";
 import { ToastProvider } from "./components/toast";
 import "./globals.css";
 
@@ -24,8 +25,8 @@ export const metadata: Metadata = {
 };
 
 export default async function RootLayout({ children }: LayoutProps<"/">) {
-  const user = await requireUser();
-  const conversations = await conversationService().list(user);
+  const user = await currentUser();
+  const conversations = user ? await conversationService().list(user) : [];
 
   return (
     <html
@@ -34,10 +35,17 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
     >
       <body className="min-h-full">
         <ToastProvider>
-          <div className="flex min-h-dvh">
-            <ConversationSidebar initialConversations={conversations} />
-            <div className="min-w-0 flex-1">{children}</div>
-          </div>
+          {user ? (
+            <div className="flex min-h-dvh">
+              <ConversationSidebar
+                initialConversations={conversations}
+                accountControl={<LogoutControl />}
+              />
+              <div className="min-w-0 flex-1">{children}</div>
+            </div>
+          ) : (
+            children
+          )}
         </ToastProvider>
       </body>
     </html>

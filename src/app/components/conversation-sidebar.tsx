@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { type FormEvent, useState, useTransition } from "react";
+import { type FormEvent, type ReactNode, useState, useTransition } from "react";
 
 import type { Conversation } from "@/server/conversations";
 
@@ -20,8 +20,10 @@ const dateFormatter = new Intl.DateTimeFormat("en-US", {
 
 export function ConversationSidebar({
   initialConversations,
+  accountControl,
 }: {
   initialConversations: Conversation[];
+  accountControl?: ReactNode;
 }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -161,6 +163,10 @@ export function ConversationSidebar({
             </ul>
           )}
         </nav>
+
+        {accountControl && (
+          <div className="border-t border-gray-100 p-3">{accountControl}</div>
+        )}
 
       </aside>
 

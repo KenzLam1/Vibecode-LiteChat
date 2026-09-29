@@ -1,6 +1,9 @@
+import { requireUser } from "@/server/current-user";
+
 import { NewConversationButton } from "./components/new-conversation";
 
-export default function Home() {
+export default async function Home() {
+  await requireUser();
   return (
     <main className="flex min-h-dvh items-center justify-center p-6">
       <NewConversationButton className="flex min-h-52 w-full max-w-lg flex-col items-center justify-center gap-4 rounded-3xl border-2 border-dashed border-primary/40 bg-white px-12 py-10 text-primary shadow-sm transition hover:border-primary hover:bg-primary/5">

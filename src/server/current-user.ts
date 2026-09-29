@@ -1,32 +1,25 @@
 import "server-only";
 
-import { eq } from "drizzle-orm";
+import { redirect } from "next/navigation";
+import { cache } from "react";
 
-import { getDb } from "./db";
-import { users } from "./db/schema";
+import { accountService, loginSessionToken, type User } from "./accounts";
 
-export type CurrentUser = { id: string; username: string };
+export type CurrentUser = User;
 
-const SEEDED_USERNAME = "demo";
-// Not a valid hash, so no password can ever log in as the seeded user.
-const UNUSABLE_PASSWORD_HASH = "!";
+// The user this request's login session cookie belongs to, or null when
+// logged out. Resolved once per request. Route Handlers use this and answer
+// 401 on null; pages and Server Functions use requireUser().
+export const currentUser = cache(async (): Promise<CurrentUser | null> => {
+  const token = await loginSessionToken();
+  if (!token) return null;
+  return accountService().resolve(token);
+});
 
-// The only way routes get the current user. Until login exists it returns a
-// seeded user; later it resolves the login session cookie instead.
+// The only way pages and Server Functions get the current user. Logged-out
+// visitors are sent to the login page.
 export async function requireUser(): Promise<CurrentUser> {
-  const db = getDb();
-  const columns = { id: users.id, username: users.username };
-
-  db.insert(users)
-    .values({ username: SEEDED_USERNAME, passwordHash: UNUSABLE_PASSWORD_HASH })
-    .onConflictDoNothing({ target: users.username })
-    .run();
-
-  const user = db
-    .select(columns)
-    .from(users)
-    .where(eq(users.username, SEEDED_USERNAME))
-    .get();
-  if (!user) throw new Error("Seeded user is missing");
+  const user = await currentUser();
+  if (!user) redirect("/login");
   return user;
 }
