@@ -2,12 +2,19 @@
 
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
-import { useState } from "react";
 
 import type { CatalogModel } from "@/lib/models";
 import type { ChatMessage } from "@/server/db/schema";
 
-import { TryAgainPlaceholder } from "./try-again-placeholder";
+import { Composer } from "./components/composer";
+import {
+  AssistantBubble,
+  MessageBubble,
+  hasAnswer,
+} from "./components/message-bubble";
+import { ReplyError } from "./components/reply-error";
+import { ThinkingTimer } from "./components/thinking-timer";
+import { TryAgainButton } from "./components/try-again";
 
 // The server keeps the history, so a request carries only what's new: the
 // text of a sent message, or which conversation to regenerate.
@@ -39,88 +46,58 @@ export function Chat({
       messages: initialMessages,
       transport,
     });
-  const [input, setInput] = useState("");
   const busy = status === "submitted" || status === "streaming";
+  const lastMessage = messages.at(-1);
+  // The timer runs from the request until the first answer token; reasoning
+  // arriving first doesn't stop it.
+  const thinking =
+    busy && !(lastMessage?.role === "assistant" && hasAnswer(lastMessage));
   // A reopened conversation whose last message never got an answer.
-  const unanswered = status === "ready" && messages.at(-1)?.role === "user";
-
-  function send() {
-    const text = input.trim();
-    if (!text || busy) return;
-    sendMessage({ text });
-    setInput("");
-  }
+  const unanswered = status === "ready" && lastMessage?.role === "user";
 
   return (
-    <div className="mx-auto flex h-dvh w-full max-w-3xl flex-col px-4">
-      <header className="flex items-center justify-between py-4">
-        <h1 className="font-display text-2xl font-semibold text-primary">
-          LiteChat
-        </h1>
-        <span className="rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-sm font-medium text-primary">
-          {model.displayName}
-        </span>
+    <div className="flex h-dvh w-full flex-col">
+      <header className="border-b border-gray-200 bg-white">
+        <div className="mx-auto flex w-full max-w-3xl items-center px-4 py-3">
+          <h1 className="font-display text-2xl font-semibold text-primary">
+            LiteChat
+          </h1>
+        </div>
       </header>
 
-      <main className="flex flex-1 flex-col gap-4 overflow-y-auto py-4">
-        {messages.length === 0 && (
-          <p className="m-auto text-center text-gray-500">
-            Send a message to start chatting with {model.displayName}.
-          </p>
-        )}
-        {messages.map((message) => (
-          <div
-            key={message.id}
-            className={
-              message.role === "user"
-                ? "max-w-[80%] self-end whitespace-pre-wrap rounded-2xl bg-primary px-4 py-2 text-white"
-                : "whitespace-pre-wrap text-gray-900"
-            }
-          >
-            {message.parts.map((part, index) =>
-              part.type === "text" ? <span key={index}>{part.text}</span> : null,
-            )}
-          </div>
-        ))}
-        {unanswered && <TryAgainPlaceholder onClick={() => regenerate()} />}
-        {status === "submitted" && (
-          <p className="text-sm text-gray-500">Thinking…</p>
-        )}
-        {error && (
-          <p className="rounded-lg bg-red-50 px-4 py-2 text-sm text-red-700">
-            {error.message}
-          </p>
-        )}
+      <main className="flex-1 overflow-y-auto">
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 py-6">
+          {messages.length === 0 && (
+            <p className="mt-24 text-center text-gray-500">
+              Send a message to start chatting with {model.displayName}.
+            </p>
+          )}
+          {messages.map((message) => (
+            <MessageBubble key={message.id} message={message} />
+          ))}
+          {thinking && (
+            <AssistantBubble>
+              <ThinkingTimer />
+            </AssistantBubble>
+          )}
+          {unanswered && (
+            <div>
+              <TryAgainButton onClick={() => void regenerate()} />
+            </div>
+          )}
+          {error && !busy && (
+            <ReplyError error={error} onRetry={() => void regenerate()} />
+          )}
+        </div>
       </main>
 
-      <form
-        className="mb-4 flex items-end gap-2 rounded-2xl border border-gray-300 p-2 focus-within:border-primary"
-        onSubmit={(event) => {
-          event.preventDefault();
-          send();
-        }}
-      >
-        <textarea
-          className="max-h-48 flex-1 resize-none bg-transparent px-2 py-1 outline-none"
-          rows={1}
-          placeholder={`Message ${model.displayName}`}
-          value={input}
-          onChange={(event) => setInput(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              send();
-            }
-          }}
+      <footer className="mx-auto w-full max-w-3xl px-4 pb-4">
+        <Composer
+          model={model}
+          busy={busy}
+          onSend={(text) => void sendMessage({ text })}
         />
-        <button
-          type="submit"
-          disabled={busy || !input.trim()}
-          className="rounded-xl bg-primary px-4 py-2 font-medium text-white disabled:opacity-40"
-        >
-          Send
-        </button>
-      </form>
+      </footer>
     </div>
   );
 }
